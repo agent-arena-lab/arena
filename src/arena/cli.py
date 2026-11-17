@@ -145,6 +145,27 @@ def cmd_transcript(args) -> int:
     return 0
 
 
+def cmd_export(args) -> int:
+    from .export import export_experiment
+
+    archive = export_experiment(Path(args.exp_dir), Path(args.out) if args.out else None,
+                                include_server_logs=not args.no_server_logs)
+    print(f"Export: {archive}")
+    print(f"Prüfsumme: {archive}.sha256")
+    print("Alle Dateien geprüft: OK. Archiv + .sha256 zusammen kopieren, am Ziel: arena verify <archiv>")
+    return 0
+
+
+def cmd_verify(args) -> int:
+    from .export import verify
+
+    report = verify(Path(args.target))
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    print("OK – alles vollständig und unverändert." if report["ok"] else "FEHLER – Export unvollständig oder verändert!",
+          file=sys.stderr)
+    return 0 if report["ok"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="arena", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -197,6 +218,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--blind", action="store_true")
     p.add_argument("--out")
     p.set_defaults(fn=cmd_transcript)
+
+    p = sub.add_parser("export", help="Experiment als Archiv mit Prüfsummen exportieren (runs/_exports/)")
+    p.add_argument("exp_dir")
+    p.add_argument("--out", help="Zielordner (Standard: runs/_exports)")
+    p.add_argument("--no-server-logs", action="store_true", help="llama-server-Logs nicht mitnehmen")
+    p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("verify", help="Export-Archiv oder entpackten Export-Ordner prüfen")
+    p.add_argument("target")
+    p.set_defaults(fn=cmd_verify)
 
     args = ap.parse_args(argv)
     return int(args.fn(args) or 0)

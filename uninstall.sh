@@ -40,6 +40,12 @@ for d in ${DIRS[@]+"${DIRS[@]}"}; do
   size="$(du -sh "$d" 2>/dev/null | cut -f1 || true)"
   echo "  Ordner:        $d ${size:+($size, inkl. runs/ und Modelle)}"
 done
+for d in ${DIRS[@]+"${DIRS[@]}"}; do
+  n_exp="$(find "$d/runs/_exports" -maxdepth 1 -name '*.tar.gz' 2>/dev/null | wc -l | tr -d ' ' || true)"
+  if [[ -n "$n_exp" && "$n_exp" != "0" ]]; then
+    echo "  ACHTUNG:       $n_exp Export-Archiv(e) in $d/runs/_exports werden mitgelöscht – vorher wegkopieren!"
+  fi
+done
 for i in ${IMAGES[@]+"${IMAGES[@]}"}; do echo "  Docker-Image:  $i (+ Container daraus)"; done
 for b in ${BREW[@]+"${BREW[@]}"}; do echo "  brew-Paket:    $b"; done
 for p in ${APT[@]+"${APT[@]}"}; do echo "  apt-Paket:     $p"; done

@@ -89,6 +89,8 @@ Testen der Pipeline, inhaltlich bedeutungslos.
 | `arena coding-sheet runs/<exp> --out coding/` | Verblindeter Kodierbogen + Transkripte + Schlüsseldatei |
 | `arena kappa coderA.csv coderB.csv` | Cohens κ je Kategorie |
 | `arena transcript runs/<exp>/<run_id> [--blind]` | Lauf als Markdown |
+| `arena export runs/<exp> [--out DIR] [--no-server-logs]` | Archiv mit Prüfsummen für den Transfer (Standard: `runs/_exports/`) |
+| `arena verify <archiv.tar.gz \| entpackter Ordner>` | Prüft Archiv-Prüfsumme und jede einzelne Datei |
 
 ## Spielablauf (Operationalisierung)
 
@@ -157,6 +159,32 @@ evtl. bis Runde 15). `v1` bleibt für alternierende Züge.
   der Auswertung markiert (`truncated`, `any_truncated`) statt still weitergerechnet.
 * `runs/<exp>/_system/` – L4T-Version, `nvpmodel`, llama.cpp-Commit, `check`-Ergebnis je Modell.
 * `runs/_server_logs/` – vollständige llama-server-Logs.
+
+## Export und Transfer
+
+`run_all.sh` exportiert am Ende automatisch; manuell: `arena export runs/core_v1`. Ergebnis in `runs/_exports/`:
+
+```
+core_v1_20261118-063012Z.tar.gz          Archiv (Zeitstempel UTC im Namen)
+core_v1_20261118-063012Z.tar.gz.sha256   Prüfsumme des Archivs
+```
+
+Im Archiv liegt alles unter `core_v1_<zeitstempel>/`: der komplette Experiment-Ordner (alle Läufe, `_analysis`,
+`_system`, `_incomplete`), `_server_logs/`, `MANIFEST.sha256` (SHA-256 **jeder** Datei) und `EXPORT_INFO.json`
+(Zeitpunkt, Rechner, Git-Commit, Anzahl Läufe, davon fertig, Dateien, Bytes). Direkt nach dem Erzeugen wird das
+Archiv einmal komplett gegengeprüft.
+
+Transfer: **Archiv und `.sha256` zusammen** kopieren, am Ziel prüfen:
+
+```bash
+arena verify core_v1_20261118-063012Z.tar.gz
+```
+
+Ohne arena: `shasum -a 256 -c core_v1_….tar.gz.sha256`, nach dem Entpacken im Ordner
+`shasum -a 256 -c MANIFEST.sha256`.
+
+> ⚠️ `runs/_exports/` liegt im Installationsordner und wird von `uninstall.sh` mitgelöscht. Erst wegkopieren und
+> am Ziel mit `arena verify` prüfen, dann deinstallieren.
 
 ## Reasoning-Parsing
 

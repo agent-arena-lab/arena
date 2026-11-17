@@ -37,4 +37,6 @@ done
 
 log "analysis ..."
 harness analyze "runs/$EXP_NAME"
-log "done: runs/$EXP_NAME/_analysis"
+log "export (Archiv + Prüfsummen) ..."
+harness export "runs/$EXP_NAME"
+log "done: runs/$EXP_NAME/_analysis, Export in runs/_exports/"

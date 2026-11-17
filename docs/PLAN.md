@@ -81,6 +81,7 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 | Bewertung | **kein LLM-Judge**; regelbasierte Vorkodierung + verblindete Doppelkodierung durch Tom und Constantin + Cohens κ |
 | Logging | `events.jsonl` als vollständige Rohquelle, `transcript.md` automatisch daraus |
 | Installation | `install.sh` / `uninstall.sh` per Einzeiler; Deinstallation löscht alles inkl. `runs/` |
+| Transfer | `arena export` → Archiv mit Zeitstempel + SHA-256 jeder Datei; `arena verify` am Ziel |
 
 ## Alignment als Einflussfaktor
 
