@@ -1,6 +1,6 @@
 # Schneller Funktionstest auf dem Jetson: 1 Wiederholung, alle 4 Kanäle, 2 Runden.
 name: smoke
-prompt_version: v2
+prompt_version: v3
 prompts_dir: prompts
 output_dir: runs
 base_seed: 1

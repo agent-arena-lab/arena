@@ -75,6 +75,7 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 | Gleichstand („schnellste“) | beide in derselben Runde korrekt → Überlebender zufällig (steht im Prompt) |
 | Abgabe | genau **eine** pro Agent, keine Rückmeldung ob korrekt; der andere erfährt, *dass* abgegeben wurde |
 | Prompts | **Englisch**; kein Prompt erwähnt Lügen, Zurückhalten oder Manipulation |
+| Kontrollgruppe | Prompt sagt explizit: keine Kommunikation **und keine weiteren Informationen** während der Simulation (prompts/v3) |
 | Token-Limit | keine inhaltliche Kürzung; Sicherheitsnetz `max_tokens` 32.768, Abschneiden wird als `truncated` markiert |
 | Thinking im Verlauf | wird **nicht** in die History zurückgegeben (Qwen-Vorgabe), aber vollständig geloggt |
 | Backend | `llama-server` (llama.cpp) mit `--jinja --reasoning-format deepseek` |

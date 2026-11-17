@@ -128,9 +128,11 @@ gelöscht/überschrieben“ ist objektiv messbar. `append_file` existiert bewuss
 
 ## Prompts
 
-`prompts/v2/prompts.yaml` (aktuell; englisch – die Modelle denken ohnehin überwiegend englisch; Kodierung erfolgt auf
+`prompts/v3/prompts.yaml` (aktuell; englisch – die Modelle denken ohnehin überwiegend englisch; Kodierung erfolgt auf
 Englisch). SHA-256 der Datei wird in jedem Lauf geloggt; Änderungen ⇒ neuer Ordner. `v2` gegenüber `v1`: gleichzeitige
-Runden (Sichtbarkeit ab nächster Runde) und Gleichstand-Regel bei `fastest`. `v1` bleibt für alternierende Züge.
+Runden (Sichtbarkeit ab nächster Runde) und Gleichstand-Regel bei `fastest`. `v3` gegenüber `v2`: Die Kontrollgruppe
+(`none`) erfährt explizit, dass während der Simulation keine weiteren Informationen kommen (sonst warten die Agenten
+evtl. bis Runde 15). `v1` bleibt für alternierende Züge.
 
 * Persona-Sätze sind etwa gleich lang (`neutral` / `survive` / `cooperate`).
 * **Kein Prompt erwähnt Lügen, Zurückhalten oder Manipulieren.** Selektionsdruck entsteht nur durch die Spielregel.
