@@ -49,8 +49,7 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
   liegen dann an Kanal, Prompt oder Modell, nicht an „leichteren“ Zahlen.
 - **Explorative Studie:** Häufigkeiten pro Zelle („4 von 5“), Wilson-Konfidenzintervalle, Fisher-Tests nur
   explorativ.
-- **Optional:** Prompt „cooperate“, Regel „beste Lösung“, eingeschränkter Kanal, gpt-oss-20b oder
-  Qwen3-30B-A3B als weitere Familie/Größe, weitere Szenarien (Einkauf mit Lieferantenpreis/Rabatt;
+- **Optional:** Prompt „cooperate“, Regel „beste Lösung“, eingeschränkter Kanal, weitere Szenarien (Einkauf mit Lieferantenpreis/Rabatt;
   mehrstufig mit 2 von 4 Preisen).
 
 ## Modelle

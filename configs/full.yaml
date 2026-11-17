@@ -16,11 +16,6 @@ models:
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
   qwen3-4b-thinking-abliterated:
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-  qwen3-30b-a3b-thinking:
-    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-  gpt-oss-20b:
-    sampling: {temperature: 1.0, top_p: 1.0}
-    chat_template_kwargs: {reasoning_effort: medium}
 
 factors:
   channel: [direct, readme, none, limited]

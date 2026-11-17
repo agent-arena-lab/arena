@@ -193,8 +193,6 @@ Verblindung: Transkripte enthalten keine System-Prompts/Bedingungen; Reasoning k
 |---|---|---|
 | `qwen3-4b-thinking` | unsloth/Qwen3-4B-Thinking-2507-GGUF, Q4_K_M | **Kern**, mit Alignment |
 | `qwen3-4b-thinking-abliterated` | mradermacher/Huihui-Qwen3-4B-Thinking-2507-abliterated-GGUF, Q4_K_M | **Kern**, gleiches Basismodell ohne Ablehnungen (huihui-ai) |
-| `qwen3-30b-a3b-thinking` | unsloth/Qwen3-30B-A3B-Thinking-2507-GGUF, Q4_K_M | optional, mittel (MoE, 3B aktiv) |
-| `gpt-oss-20b` | ggml-org/gpt-oss-20b-GGUF, MXFP4 | optional, native Quantisierung |
 
 Kern-Design (`configs/experiment.yaml`): beide Qwen3-4B-Varianten × 3 Kanäle × 2 Prompts × 5 Wiederholungen =
 **60 Läufe**. Beide Varianten in derselben Quantisierung, damit sich nur das Alignment unterscheidet. Die
@@ -202,8 +200,10 @@ abliterated Variante ist wenig verbreitet: vor den Hauptläufen mit `arena check
 kommen und das Thinking getrennt wird.
 
 Weitere Modelle: neue `models/<alias>.env` + Eintrag unter `models:` in der Config (Key = Alias).
-Sampling = Herstellerempfehlung (Qwen: T 0.6, top-p 0.95, top-k 20; gpt-oss: T 1.0, top-p 1.0) – Temperatur und
-Quantisierung unterscheiden sich also zwischen Familien; bei Modellvergleichen berichten.
+Sampling = Qwen-Empfehlung für Thinking-Modelle (T 0.6, top-p 0.95, top-k 20), für beide Varianten identisch.
+
+`install.sh` und `scripts/download_models.sh` (ohne Argumente) laden genau die Modelle aus `models/*.env`,
+also beide Kernmodelle.
 
 ## Bekannte Grenzen / vor dem Hauptexperiment prüfen
 
@@ -212,8 +212,7 @@ Quantisierung unterscheiden sich also zwischen Familien; bei Modellvergleichen b
    `llama-server --help` der gebauten Version prüfen.
 2. **Determinismus:** Seeds werden pro Request gesetzt, GPU-Inferenz in llama.cpp ist aber nicht bit-exakt
    reproduzierbar. Reproduzierbar sind Design, Prompts, Preise, Reihenfolge – nicht jeder Token.
-3. **Speicher:** Qwen3-4B Q4_K_M (~2,5 GB) + 64k Kontext passt auf dem Orin problemlos; 30B-A3B (~18–19 GB) + 64k
-   passt auf 64 GB. Auf kleinen Macs bei OOM `CTX` in `models/<alias>.env` senken. Kontextüberlauf beendet den Lauf mit Status `context_overflow` (wird geloggt, nicht still verworfen).
+3. **Speicher:** Qwen3-4B Q4_K_M (~2,5 GB) + 64k Kontext passt auf dem Orin problemlos. Auf kleinen Macs bei OOM `CTX` in `models/<alias>.env` senken. Kontextüberlauf beendet den Lauf mit Status `context_overflow` (wird geloggt, nicht still verworfen).
 4. **Laufzeit:** zuerst `arena run --limit 3` und hochrechnen; Reasoning-Modelle auf dem Orin brauchen pro Zug
    leicht 30 s–mehrere Minuten.
 5. Die beiden Agenten eines Laufs sind statistisch nicht unabhängig – inferenzielle Aussagen auf Run-Ebene.
