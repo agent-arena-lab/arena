@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import __version__
+from .analysis import render_transcript
 from .autocode import code_run
 from .config import ExperimentCfg
 from .game import Game, RunSpec
@@ -141,7 +142,9 @@ def run_one(
         **result,
         "autocode": code_run(events, spec.to_dict(), spec.channel),
     }
-    write_json(summary_path, summary)
+    # Lesbares Markdown direkt neben den Rohdaten (jederzeit aus events.jsonl neu erzeugbar)
+    (run_dir / "transcript.md").write_text(render_transcript(run_dir), encoding="utf-8")
+    write_json(summary_path, summary)  # last: summary.json marks the run as complete (resume)
     return summary
 
 

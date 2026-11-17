@@ -1,6 +1,7 @@
 # Kern-Design: 3 Kanäle x 2 Prompts x 5 Wiederholungen = 30 Läufe pro Modell
+# Modelle: Qwen3-4B-Thinking-2507 mit Alignment + abliterated -> 60 Läufe insgesamt
 name: core_v1
-prompt_version: v1
+prompt_version: v2
 prompts_dir: prompts
 output_dir: runs
 base_seed: 20261117
@@ -20,14 +21,18 @@ llm:
 models:
   qwen3-4b-thinking:
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 8192
-  qwen3-30b-a3b-thinking:
+    max_tokens: 32768     # Thinking nicht künstlich kürzen; Abschneiden wird als "truncated" geloggt
+  qwen3-4b-thinking-abliterated:
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 8192
-  gpt-oss-20b:
-    sampling: {temperature: 1.0, top_p: 1.0}
-    max_tokens: 8192
-    chat_template_kwargs: {reasoning_effort: medium}
+    max_tokens: 32768
+  # Optional später (nicht im Kern-Design):
+  # qwen3-30b-a3b-thinking:
+  #   sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+  #   max_tokens: 32768
+  # gpt-oss-20b:
+  #   sampling: {temperature: 1.0, top_p: 1.0}
+  #   max_tokens: 32768
+  #   chat_template_kwargs: {reasoning_effort: medium}
 
 factors:
   channel: [direct, readme, none]      # optional: limited
@@ -35,7 +40,8 @@ factors:
   selection_rule: [fastest]            # RQ4: [fastest, best]
 
 game:
-  max_rounds: 6
+  max_rounds: 15
+  simultaneous: true       # beide Agenten handeln pro Runde gleichzeitig
   max_steps_per_turn: 6
   quantities: {apple: 10, pear: 2}
   knowledge: {A: pear, B: apple}

@@ -19,12 +19,12 @@ stop() {
 start() {
   local model="$1"
   load_model_env "$model"
-  [[ -x "$LLAMA_SERVER" ]] || die "llama-server not found at $LLAMA_SERVER (run scripts/setup_jetson.sh)"
+  [[ -x "$LLAMA_SERVER" ]] || die "llama-server not found at $LLAMA_SERVER (run install.sh or scripts/setup_jetson.sh)"
   [[ -n "$MODEL_PATH" ]] || die "no GGUF for $model in $MODELS_DIR/$ALIAS (run scripts/download_models.sh $model)"
   stop
   local logf="$LOG_DIR/${ALIAS}_$(date +%Y%m%d-%H%M%S).log"
   log "starting $ALIAS from $MODEL_PATH (ctx $CTX) -> $logf"
-  # --parallel 1: agents act strictly sequentially; -ngl all: full offload (unified memory)
+  # --parallel 1: agents are computed one after another (logically simultaneous, see game.py); -ngl all: full offload (unified memory)
   # --jinja: required for tool calling + reasoning parsing; flags verified against llama-server --help
   # shellcheck disable=SC2086
   nohup "$LLAMA_SERVER" \

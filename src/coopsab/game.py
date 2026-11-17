@@ -1,4 +1,13 @@
-"""The game: two agents, partial knowledge, selection pressure, turn-based loop."""
+"""The game: two agents, partial knowledge, selection pressure, round-based loop.
+
+Default mode is **simultaneous**: in every round both agents see the same state (built at
+the start of the round) and act without seeing what the other does in that round.
+Messages, file changes and submission notices of the other agent become visible at the
+start of the next round. README edits are kept as a private draft per agent during the
+round and applied to the shared file at the end of the round (first mover's edits first;
+overwritten same-round lines are logged as ``removed_unseen_by_author``, not as
+manipulation). With ``game.simultaneous: false`` the original alternating mode is used.
+"""
 
 from __future__ import annotations
 
@@ -77,6 +86,9 @@ class AgentState:
     max_steps_hit: int = 0
     msgs_sent: int = 0
     msgs_rejected: int = 0
+    truncated_responses: int = 0  # finish_reason == "length" (max_tokens reached)
+    draft: str = ""  # simultaneous mode: README as this agent sees it during the round
+    pending_ops: list[tuple[str, str, bool]] = field(default_factory=list)  # (path, content, append)
 
     def stats(self) -> dict[str, Any]:
         return {
@@ -91,6 +103,7 @@ class AgentState:
             "max_steps_hit": self.max_steps_hit,
             "msgs_sent": self.msgs_sent,
             "msgs_rejected": self.msgs_rejected,
+            "truncated_responses": self.truncated_responses,
             "submission": asdict(self.submission) if self.submission else None,
         }
 
@@ -132,6 +145,7 @@ class Game:
         self.tools = tools_for(spec.channel)
         self.allowed = tool_names(spec.channel)
         self.model_cfg = cfg.models[spec.model]
+        self.simultaneous = self.g.simultaneous
         self.rng = random.Random(spec.seed)
         self.call_counter = 0
         self.action_counter = 0
@@ -174,6 +188,7 @@ class Game:
             true_total=self.spec.true_total,
             system_prompts={k: a.messages[0]["content"] for k, a in self.agents.items()},
             tools=[t["function"]["name"] for t in self.tools],
+            simultaneous=self.simultaneous,
         )
         if self.ws is not None:
             self.ws.init_file("README.md", README_INIT)
@@ -186,10 +201,13 @@ class Game:
             for rnd in range(1, self.g.max_rounds + 1):
                 self.round = rnd
                 self.log.log("round_start", round=rnd)
-                for key in order:
-                    st = self.agents[key]
-                    if st.submission is None:
-                        self._take_turn(st)
+                if self.simultaneous:
+                    self._play_simultaneous_round(order)
+                else:
+                    for key in order:
+                        st = self.agents[key]
+                        if st.submission is None:
+                            self._take_turn(st)
                 if all(a.submission for a in self.agents.values()):
                     break
             else:
@@ -210,6 +228,42 @@ class Game:
             "agents": {k: a.stats() for k, a in self.agents.items()},
         }
 
+    # ------------------------------------------------------------------ simultaneous rounds
+    def _play_simultaneous_round(self, order: list[str]) -> None:
+        active = [k for k in order if self.agents[k].submission is None]
+        base = self.ws.read("README.md") if self.ws is not None else ""
+        # Both observations are built BEFORE anyone acts -> identical information state.
+        observations = {k: self._observation(self.agents[k]) for k in active}
+        for k in active:
+            st = self.agents[k]
+            st.draft = base
+            st.pending_ops.clear()
+        for k in active:
+            self._take_turn(self.agents[k], observations[k])
+        self._resolve_round(order)
+
+    def _resolve_round(self, order: list[str]) -> None:
+        """Apply the README edits of this round to the shared file (first mover first)."""
+        changed: dict[str, bool] = {k: False for k in order}
+        if self.ws is not None:
+            for k in order:
+                st = self.agents[k]
+                for path, content, append in st.pending_ops:
+                    try:
+                        change = self.ws.write(path, content, st.name, append=append, round_no=self.round)
+                    except SandboxError as exc:
+                        self.log.log("file_change_failed", agent=st.name, round=self.round, error=str(exc))
+                        continue
+                    changed[k] = True
+                    self.log.log("file_change", agent=st.name, **change.to_dict())
+                st.pending_ops.clear()
+            for k in order:
+                other_key = "B" if k == "A" else "A"
+                if changed[other_key] and self.g.notify_file_changes:
+                    self.agents[k].pending_notes.append(
+                        self.prompts.turn("file_changed", path="README.md", other_name=self.agents[other_key].name))
+        self.log.log("round_resolved", round=self.round, file_changes={f"Agent {k}": v for k, v in changed.items()})
+
     # ------------------------------------------------------------------ turns
     def _observation(self, st: AgentState) -> str:
         p, other = self.prompts, self._other(st)
@@ -220,7 +274,7 @@ class Game:
         for text in st.inbox:
             events.append(p.turn("message", other_name=st.other, text=text))
         st.inbox.clear()
-        if self.ws is not None and self.g.notify_file_changes:
+        if self.ws is not None and self.g.notify_file_changes and not self.simultaneous:
             for path, ver in self.ws.version.items():
                 if ver > st.seen_versions.get(path, 0) and self.ws.last_author.get(path) != st.name:
                     events.append(p.turn("file_changed", path=path))
@@ -230,8 +284,9 @@ class Game:
         lines.extend(events or [p.turn("no_events")])
         return "\n".join(lines)
 
-    def _take_turn(self, st: AgentState) -> None:
-        obs = self._observation(st)
+    def _take_turn(self, st: AgentState, obs: str | None = None) -> None:
+        if obs is None:
+            obs = self._observation(st)
         st.messages.append({"role": "user", "content": obs})
         self.log.log("turn_start", agent=st.name, round=self.round, observation=obs)
 
@@ -270,6 +325,10 @@ class Game:
         st.llm_calls += 1
         st.prompt_tokens += resp.prompt_tokens
         st.completion_tokens += resp.completion_tokens
+        if resp.finish_reason == "length":
+            st.truncated_responses += 1
+            self.log.log("truncated", agent=st.name, round=self.round, step=step,
+                         completion_tokens=resp.completion_tokens, max_tokens=self.model_cfg.max_tokens)
         self.log.log(
             "llm_response",
             agent=st.name,
@@ -332,6 +391,8 @@ class Game:
         try:
             if name == "list_files":
                 return json.dumps(self.ws.list_files()), False, True
+            if self.simultaneous and name in ("read_file", "write_file", "append_file"):
+                return self._draft_op(st, name, args)
             if name == "read_file":
                 content = self.ws.read(args.get("path", ""))
                 self.log.log("file_read", agent=st.name, path=args.get("path"), round=self.round)
@@ -341,11 +402,28 @@ class Game:
                 change = self.ws.write(args.get("path", ""), args.get("content", ""), st.name,
                                        append=(name == "append_file"))
                 st.seen_versions[change.path] = self.ws.version[change.path]
-                self.log.log("file_change", agent=st.name, round=self.round, **change.to_dict())
+                self.log.log("file_change", agent=st.name, **{**change.to_dict(), "round": self.round})
                 return f"OK: {change.path} updated (+{change.lines_added}/-{change.lines_removed} lines).", False, True
         except SandboxError as exc:
             return f"ERROR: {exc}", False, False
         return f"ERROR: tool '{name}' not implemented.", False, False
+
+    def _draft_op(self, st: AgentState, name: str, args: dict[str, Any]) -> tuple[str, bool, bool]:
+        """Simultaneous mode: reads/writes act on the agent's private draft of this round."""
+        assert self.ws is not None
+        path = self.ws._rel(args.get("path", ""))  # same path validation as the real workspace
+        if name == "read_file":
+            self.log.log("file_read", agent=st.name, path=path, round=self.round, draft=True)
+            return st.draft if st.draft else "(empty file)", False, True
+        content = args.get("content", "")
+        append = name == "append_file"
+        new = self.ws.apply_op(st.draft, content, append)
+        self.ws.check_size(new)
+        st.draft = new
+        st.pending_ops.append((path, content if isinstance(content, str) else str(content), append))
+        self.log.log("file_change_pending", agent=st.name, round=self.round, path=path,
+                     op="append" if append else "write", content=content)
+        return f"OK: {path} updated. {st.other} will see the change from the next round on.", False, True
 
     def _submit(self, st: AgentState, args: dict[str, Any]) -> tuple[str, bool, bool]:
         if st.submission is not None:
@@ -379,8 +457,14 @@ class Game:
         subs = [a.submission for a in self.agents.values() if a.submission]
         winner, reason = None, "no_valid_submission"
         if self.spec.selection_rule == "fastest":
-            correct = sorted((s for s in subs if s.correct), key=lambda s: s.order)
-            if correct:
+            correct = sorted((s for s in subs if s.correct), key=lambda s: (s.round, s.order))
+            if correct and self.simultaneous:
+                first_round = [s for s in correct if s.round == correct[0].round]
+                if len(first_round) == 1:
+                    winner, reason = first_round[0].agent, "first_correct"
+                else:  # both correct in the same round -> random survivor (announced in the prompt)
+                    winner, reason = self.rng.choice(first_round).agent, "tie_same_round_random"
+            elif correct:
                 winner, reason = correct[0].agent, "first_correct"
             else:
                 reason = "no_correct_submission"

@@ -7,6 +7,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 LLAMA_DIR="${LLAMA_DIR:-$HOME/llama.cpp}"
 LLAMA_SERVER="${LLAMA_SERVER:-$LLAMA_DIR/build/bin/llama-server}"
+# Mac (brew install llama.cpp) or any llama-server on PATH as fallback
+if [[ ! -x "$LLAMA_SERVER" ]] && command -v llama-server >/dev/null; then LLAMA_SERVER="$(command -v llama-server)"; fi
 MODELS_DIR="${MODELS_DIR:-$HOME/models}"
 LLM_HOST="${LLM_HOST:-127.0.0.1}"
 LLM_PORT="${LLM_PORT:-8080}"
@@ -32,6 +34,14 @@ load_model_env() {
 }
 
 all_models() { for f in "$ROOT_DIR"/models/*.env; do basename "$f" .env; done; }
+
+# Model keys that are active (not commented out) under `models:` in a config file.
+config_models() {
+  awk '/^models:/{m=1; next} m && /^[^ #]/{m=0} m && /^  [A-Za-z0-9._-]+:/{sub(/^  /,""); sub(/:.*/,""); print}' "$1"
+}
+
+# Portable SHA-256 (Linux: sha256sum, macOS: shasum)
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 
 harness() {
   # Runs the harness CLI either in the Docker container or in the local venv.
