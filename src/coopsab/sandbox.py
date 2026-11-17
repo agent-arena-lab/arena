@@ -34,6 +34,10 @@ class FileChange:
     lines_added: int
     lines_removed: int
     removed_by_author: dict[str, int] = field(default_factory=dict)
+    # Simultaneous rounds: lines of another author that were written in the SAME round and
+    # therefore were not visible to this author when it decided (not counted as manipulation).
+    removed_unseen_by_author: dict[str, int] = field(default_factory=dict)
+    round: int | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -46,6 +50,7 @@ class Workspace:
         self.max_bytes = max_bytes
         self.allowed_files = allowed_files  # None = any flat file name
         self.blame: dict[str, list[str]] = {}  # path -> author per line
+        self.blame_round: dict[str, list[int]] = {}  # path -> round in which each line was written
         self.version: dict[str, int] = {}
         self.last_author: dict[str, str] = {}
 
@@ -78,6 +83,7 @@ class Workspace:
         name = self._rel(name)
         self._abs(name).write_text(content, encoding="utf-8")
         self.blame[name] = [author] * len(content.splitlines())
+        self.blame_round[name] = [0] * len(content.splitlines())
         self.version[name] = 0
         self.last_author[name] = author
 
@@ -91,41 +97,58 @@ class Workspace:
             raise SandboxError(f"file '{name}' does not exist")
         return full.read_text(encoding="utf-8")
 
-    def write(self, path: str, content: str, author: str, append: bool = False) -> FileChange:
-        name = self._rel(path)
+    @staticmethod
+    def apply_op(before: str, content: str, append: bool) -> str:
+        """Result of a write/append on `before` (shared by real writes and simultaneous drafts)."""
         if not isinstance(content, str):
             content = str(content)
-        full = self._abs(name)
-        before = full.read_text(encoding="utf-8") if full.exists() else ""
         if append:
             sep = "" if (not before or before.endswith("\n")) else "\n"
-            after = before + sep + content
-            op = "append"
-        else:
-            after = content
-            op = "write" if full.exists() else "create"
-        if len(after.encode("utf-8")) > self.max_bytes:
+            return before + sep + content
+        return content
+
+    def check_size(self, text: str) -> None:
+        if len(text.encode("utf-8")) > self.max_bytes:
             raise SandboxError(f"file would exceed {self.max_bytes} bytes")
+
+    def write(self, path: str, content: str, author: str, append: bool = False,
+              round_no: int | None = None) -> FileChange:
+        name = self._rel(path)
+        full = self._abs(name)
+        before = full.read_text(encoding="utf-8") if full.exists() else ""
+        after = self.apply_op(before, content, append)
+        op = "append" if append else ("write" if full.exists() else "create")
+        self.check_size(after)
         full.write_text(after, encoding="utf-8")
 
         old_lines, new_lines = before.splitlines(), after.splitlines()
         old_blame = self.blame.get(name, ["unknown"] * len(old_lines))
+        old_round = self.blame_round.get(name, [0] * len(old_lines))
         if len(old_blame) != len(old_lines):  # defensive: external modification
             old_blame = ["unknown"] * len(old_lines)
+        if len(old_round) != len(old_lines):
+            old_round = [0] * len(old_lines)
         new_blame: list[str] = []
+        new_round: list[int] = []
         removed_by: dict[str, int] = {}
+        removed_unseen: dict[str, int] = {}
         added = removed = 0
         sm = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
         for tag, i1, i2, j1, j2 in sm.get_opcodes():
             if tag == "equal":
                 new_blame.extend(old_blame[i1:i2])
+                new_round.extend(old_round[i1:i2])
                 continue
             for k in range(i1, i2):
                 removed += 1
                 removed_by[old_blame[k]] = removed_by.get(old_blame[k], 0) + 1
+                if round_no is not None and old_round[k] == round_no and old_blame[k] != author:
+                    removed_unseen[old_blame[k]] = removed_unseen.get(old_blame[k], 0) + 1
             added += j2 - j1
             new_blame.extend([author] * (j2 - j1))
+            new_round.extend([round_no or 0] * (j2 - j1))
         self.blame[name] = new_blame
+        self.blame_round[name] = new_round
         self.version[name] = self.version.get(name, 0) + 1
         self.last_author[name] = author
 
@@ -137,4 +160,5 @@ class Workspace:
                 tofile=f"b/{name}",
             )
         )
-        return FileChange(name, author, op, _sha(before), _sha(after), diff, added, removed, removed_by)
+        return FileChange(name, author, op, _sha(before), _sha(after), diff, added, removed, removed_by,
+                          removed_unseen, round_no)

@@ -1,6 +1,6 @@
 # Schneller Funktionstest auf dem Jetson: 1 Wiederholung, alle 4 Kanäle, 2 Runden.
 name: smoke
-prompt_version: v1
+prompt_version: v2
 prompts_dir: prompts
 output_dir: runs
 base_seed: 1
@@ -13,6 +13,9 @@ llm:
 
 models:
   qwen3-4b-thinking:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+    max_tokens: 4096
+  qwen3-4b-thinking-abliterated:
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
     max_tokens: 4096
   qwen3-30b-a3b-thinking:
@@ -30,3 +33,4 @@ factors:
 
 game:
   max_rounds: 3
+  simultaneous: true

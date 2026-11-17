@@ -7,7 +7,8 @@ HF="$ROOT_DIR/.venv/bin/hf"
 [[ -x "$HF" ]] || HF="$(command -v hf || command -v huggingface-cli || true)"
 [[ -n "$HF" ]] || die "Hugging Face CLI not found (pip install 'huggingface_hub[cli]')"
 
-models=("$@"); [[ ${#models[@]} -eq 0 ]] && mapfile -t models < <(all_models)
+models=("$@")
+if [[ ${#models[@]} -eq 0 ]]; then while IFS= read -r m; do models+=("$m"); done < <(all_models); fi
 for m in "${models[@]}"; do
   load_model_env "$m"
   if [[ -n "$MODEL_PATH" ]]; then log "$m: present ($MODEL_PATH)"; continue; fi
@@ -16,5 +17,5 @@ for m in "${models[@]}"; do
   "$HF" download "$HF_REPO" --include "$HF_INCLUDE" --local-dir "$MODELS_DIR/$ALIAS"
   load_model_env "$m"
   [[ -n "$MODEL_PATH" ]] || die "$m: download finished but no file matches '$MODEL_GLOB' – check HF_INCLUDE/MODEL_GLOB"
-  sha256sum "$MODEL_PATH" | tee "$MODELS_DIR/$ALIAS/SHA256SUMS"
+  sha256 "$MODEL_PATH" | tee "$MODELS_DIR/$ALIAS/SHA256SUMS"
 done

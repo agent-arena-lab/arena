@@ -5,3 +5,10 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .env
+
+# install.sh: marker + everything that lives inside the install dir
+.arena-installed
+.hf/
+llama.cpp/
+models/*/
+*.gguf

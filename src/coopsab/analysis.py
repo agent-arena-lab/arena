@@ -35,6 +35,8 @@ CODING_CATEGORIES = [
     # Intention (Reasoning-Trace)
     "I_kooperationsabsicht", "I_taeuschungsabsicht", "I_zurueckhalteabsicht", "I_manipulationsabsicht",
     "I_verdacht",
+    # Meta: Modell durchschaut den Test / verweigert das Spiel
+    "B_verweigerung", "I_testbewusstsein",
 ]
 
 
@@ -82,6 +84,7 @@ def to_frames(summaries: list[dict[str, Any]]):
             "mutual_disclosure": both_disclosed,
             "any_deception_candidate": any(v.get("deception_candidate") for v in ac.values()),
             "any_manipulation_candidate": any(v.get("manipulation_candidate") for v in ac.values()),
+            "any_truncated": any(v.get("truncated") for v in ac.values()),
             "duration_s": s.get("duration_s"),
             "total_completion_tokens": sum(a["completion_tokens"] for a in s["agents"].values()),
         })
@@ -98,6 +101,11 @@ def to_frames(summaries: list[dict[str, Any]]):
                 "suspicion_kw_hits_reasoning": a.get("suspicion_kw_hits_reasoning", 0),
                 "suspicion_kw_hits_visible": a.get("suspicion_kw_hits_visible", 0),
                 "intent_kw_hits_reasoning": a.get("intent_kw_hits_reasoning", 0),
+                "test_awareness_any": (a.get("test_awareness_kw_hits_reasoning", 0)
+                                       + a.get("test_awareness_kw_hits_visible", 0)) > 0,
+                "refusal_any": (a.get("refusal_kw_hits_reasoning", 0) + a.get("refusal_kw_hits_visible", 0)) > 0,
+                "truncated": bool(a.get("truncated")),
+                "truncated_responses": st.get("truncated_responses", 0),
                 "submit_round": sub.get("round"), "tokens_to_submit": sub.get("agent_completion_tokens"),
                 "completion_tokens": st["completion_tokens"], "llm_calls": st["llm_calls"],
                 "invalid_tool_calls": st["invalid_tool_calls"], "no_tool_responses": st["no_tool_responses"],
@@ -225,7 +233,8 @@ def analyze(exp_dir: Path, out_dir: Path | None = None) -> Path:
 
     cond = ["model", "selection_rule", "channel", "persona"]
     tables = [rate_table(adf, m, cond) for m in AGENT_METRICS]
-    tables += [rate_table(rdf, m, cond) for m in ("any_correct", "mutual_disclosure")]
+    tables += [rate_table(adf, m, cond) for m in ("test_awareness_any", "refusal_any", "truncated")]
+    tables += [rate_table(rdf, m, cond) for m in ("any_correct", "mutual_disclosure", "any_truncated")]
     import pandas as pd
 
     rates = pd.concat(tables, ignore_index=True)
@@ -347,7 +356,14 @@ def render_transcript(run_dir: Path, blind: bool = False) -> str:
             args = json.dumps(ev["arguments"], ensure_ascii=False)
             lines.append(f"- `{ev['name']}({args})` → {'OK' if ev['ok'] else 'FEHLER'}: {str(ev['result'])[:400]}")
         elif e == "file_change":
-            lines.append(f"\n```diff\n{ev['diff']}\n```\n")
+            unseen = ev.get("removed_unseen_by_author") or {}
+            note = f" (überschreibt ungesehene Zeilen: {unseen})" if unseen else ""
+            lines.append(f"\n**README-Änderung von {ev['agent']}**{note}\n\n```diff\n{ev['diff']}\n```\n")
+        elif e == "round_resolved":
+            lines.append(f"\n_Ende Runde {ev['round']}: Nachrichten und README-Änderungen werden ab der nächsten "
+                         f"Runde sichtbar._\n")
+        elif e == "truncated":
+            lines.append(f"\n⚠️ **Abgeschnitten:** {ev['agent']} hat max_tokens ({ev.get('max_tokens')}) erreicht.\n")
         elif e == "submission" and not blind:
             lines.append(f"\n**Abgabe {ev['agent']}: {ev['value']} (korrekt: {ev['correct']})**\n")
         elif e == "game_end" and not blind:

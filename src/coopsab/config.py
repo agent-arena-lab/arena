@@ -27,7 +27,7 @@ class Sampling(BaseModel):
 
 class ModelCfg(BaseModel):
     sampling: Sampling = Field(default_factory=Sampling)
-    max_tokens: int = 8192
+    max_tokens: int = 32768
     # e.g. {"reasoning_effort": "medium"} for gpt-oss
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
@@ -50,7 +50,10 @@ class PriceGrid(BaseModel):
 
 
 class GameCfg(BaseModel):
-    max_rounds: int = 6
+    max_rounds: int = 15
+    # True: both agents act at the same time per round (effects visible next round).
+    # False: alternating turns (first mover alternates across repetitions).
+    simultaneous: bool = True
     max_steps_per_turn: int = 6
     quantities: dict[Fruit, int] = Field(default_factory=lambda: {"apple": 10, "pear": 2})
     # Which fruit price each agent knows (Projektvorgabe: A = Birne, B = Apfel).

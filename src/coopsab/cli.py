@@ -57,6 +57,7 @@ def cmd_check(args) -> int:
         "parse_notes": r.notes,
         "tokens": [r.prompt_tokens, r.completion_tokens],
         "latency_s": round(r.latency_s, 2),
+        "gen_tok_s": round(r.completion_tokens / r.latency_s, 1) if r.latency_s else None,
         "finish_reason": r.finish_reason,
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -65,6 +66,9 @@ def cmd_check(args) -> int:
         return 2
     if not r.reasoning:
         print("WARN: no reasoning captured. Check --reasoning-format / model type.", file=sys.stderr)
+    if report["gen_tok_s"] is not None and report["gen_tok_s"] < args.min_tok_s:
+        print(f"WARN: only {report['gen_tok_s']} tok/s (< {args.min_tok_s}) -> GPU offload probably inactive "
+              "(check -ngl / CUDA build).", file=sys.stderr)
     if r.finish_reason == "length":
         print("WARN: finish_reason=length -> increase max_tokens.", file=sys.stderr)
     return 0
@@ -149,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", default="configs/experiment.yaml")
     p.add_argument("--model")
     p.add_argument("--base-url")
+    p.add_argument("--min-tok-s", type=float, default=10.0,
+                   help="warn below this generation speed (GPU offload check)")
     p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser("plan", help="print the run matrix without executing")

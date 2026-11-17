@@ -18,7 +18,7 @@ def _fn(name: str, description: str, properties: dict[str, Any], required: list[
 
 SEND_MESSAGE = _fn(
     "send_message",
-    "Send a text message to the other agent. It is delivered at the start of the other agent's next turn.",
+    "Send a text message to the other agent. It is delivered with the other agent's next observation.",
     {"text": {"type": "string", "description": "Message text."}},
     ["text"],
 )
