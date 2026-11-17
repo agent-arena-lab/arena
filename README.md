@@ -308,11 +308,21 @@ gh repo clone agent-arena-lab/arena && cd arena && ./install.sh
 gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash
 ```
 
-`uninstall.sh` löscht **ausschließlich**, was `install.sh` angelegt hat:
-- den Ordner `arena/` inklusive `models/`
-- die Docker-Container, Images und Volumes des Projekts (gefiltert über das Label `project=arena`)
+> ⚠️ **`uninstall.sh` löscht wirklich alles**, auch `runs/` mit allen Versuchsdaten. Es gibt **kein Backup**. Sichert vorher alles, was ihr behalten wollt.
 
-Vor dem Löschen zeigt das Skript an, was entfernt wird, und fragt nach. `runs/` mit den Versuchsdaten wird **nur nach einer zweiten Rückfrage** gelöscht, standardmäßig wird es vorher nach `~/arena-runs-backup/` kopiert.
+Ziel ist ein komplett sauberes System, als wäre das Projekt nie installiert gewesen. Damit dabei nur Projektdateien verschwinden, schreibt `install.sh` jede Datei, jeden Ordner und jede Ressource, die es anlegt, in ein Manifest (`~/.arena/manifest`). `uninstall.sh` entfernt genau diese Einträge:
+
+- den Ordner `arena/` komplett, inklusive `models/` und `runs/`
+- heruntergeladene Modelldateien, auch im Hugging-Face-Cache (`~/.cache/huggingface/…`), sofern `install.sh` sie geladen hat
+- alle Docker-Container, Images, Volumes und Netzwerke des Projekts (Label `project=arena`), inklusive des llama.cpp-Images
+- Tools wie `llama.cpp` (brew), **nur wenn `install.sh` sie selbst installiert hat**. Was vorher schon da war, bleibt
+- zuletzt `~/.arena/` mit dem Manifest selbst
+
+Vor dem Löschen zeigt das Skript einmal die vollständige Liste an und fragt **einmal** nach. Für einen Lauf ohne Rückfrage:
+
+```bash
+gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash -s -- --yes
+```
 
 ## Roadmap
 
