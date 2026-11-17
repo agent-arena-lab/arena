@@ -1,0 +1,23 @@
+# Harness container. llama-server runs natively on the Jetson host (scripts/serve.sh).
+services:
+  harness:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: coopsab-harness:latest
+    # host network only to reach llama-server on 127.0.0.1:8080. The agents themselves
+    # have no network/shell tools – their only actions are the tools in tools.py.
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /app
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    environment:
+      - HOME=/tmp
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../prompts:/app/prompts:ro
+      - ../runs:/app/runs

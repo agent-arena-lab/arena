@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Full pipeline: for each model -> start llama-server -> smoke check -> run matrix -> stop.
+# Resumable: finished runs (summary.json) are skipped on restart.
+#
+# Usage: scripts/run_all.sh [config] [model ...]
+#   scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking
+#   scripts/run_all.sh configs/experiment.yaml                 # all models in models/*.env
+#   HARNESS_MODE=native scripts/run_all.sh ...                  # without Docker
+source "$(dirname "$0")/common.sh"
+
+CONFIG="${1:-configs/experiment.yaml}"; shift || true
+models=("$@"); [[ ${#models[@]} -eq 0 ]] && mapfile -t models < <(all_models)
+EXP_NAME="$(grep -E '^name:' "$ROOT_DIR/$CONFIG" | awk '{print $2}')"
+SYS_DIR="$ROOT_DIR/runs/$EXP_NAME/_system"
+mkdir -p "$SYS_DIR"
+
+trap '"$ROOT_DIR/scripts/serve.sh" stop' EXIT INT TERM
+
+{
+  echo "date: $(date -Is)"; echo "host: $(hostname)"; uname -a
+  cat /etc/nv_tegra_release 2>/dev/null || true
+  (nvpmodel -q 2>/dev/null || sudo -n nvpmodel -q 2>/dev/null) || echo "nvpmodel: n/a"
+  "$LLAMA_SERVER" --version 2>&1 | head -n 5 || true
+  git -C "$LLAMA_DIR" rev-parse HEAD 2>/dev/null | sed 's/^/llama.cpp commit: /' || true
+  free -h
+} >"$SYS_DIR/system_$(date +%Y%m%d-%H%M%S).txt" 2>&1
+
+for m in "${models[@]}"; do
+  log "===== model: $m ====="
+  "$ROOT_DIR/scripts/serve.sh" start "$m"
+  harness check --config "$CONFIG" --model "$m" | tee "$SYS_DIR/check_$m.json"
+  harness run --config "$CONFIG" --model "$m"
+  "$ROOT_DIR/scripts/serve.sh" stop
+done
+
+log "analysis ..."
+harness analyze "runs/$EXP_NAME"
+log "done: runs/$EXP_NAME/_analysis"

@@ -1,0 +1,26 @@
+# Erweitertes Design (alle Faktoren): 4 Kanäle x 3 Prompts x 2 Regeln x 5 Wdh. = 120 Läufe pro Modell.
+# Auf dem Jetson grob planen: Laufzeit pro Lauf mit `coopsab run --limit 3` messen und hochrechnen.
+name: full_v1
+prompt_version: v1
+prompts_dir: prompts
+output_dir: runs
+base_seed: 20261117
+repetitions: 5
+
+llm:
+  base_url: http://127.0.0.1:8080
+  timeout_s: 900
+
+models:
+  qwen3-4b-thinking:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+  qwen3-30b-a3b-thinking:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+  gpt-oss-20b:
+    sampling: {temperature: 1.0, top_p: 1.0}
+    chat_template_kwargs: {reasoning_effort: medium}
+
+factors:
+  channel: [direct, readme, none, limited]
+  persona: [neutral, survive, cooperate]
+  selection_rule: [fastest, best]
