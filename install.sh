@@ -86,7 +86,7 @@ else
   done
   if command -v docker >/dev/null; then
     echo "HARNESS_MODE=docker" >>"$ARENA_DIR/.env"
-    record docker-image "coopsab-harness:latest"
+    record docker-image "arena-harness:latest"
   else
     echo "HARNESS_MODE=native" >>"$ARENA_DIR/.env"
   fi

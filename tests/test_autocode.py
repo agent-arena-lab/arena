@@ -1,4 +1,4 @@
-from coopsab.autocode import code_run, find_prices
+from arena.autocode import code_run, find_prices
 
 
 def test_find_prices():

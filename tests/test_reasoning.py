@@ -1,5 +1,5 @@
-from coopsab.llm import parse_chat_response
-from coopsab.reasoning import extract_tool_calls_from_text, split_reasoning
+from arena.llm import parse_chat_response
+from arena.reasoning import extract_tool_calls_from_text, split_reasoning
 
 
 def test_think_block():

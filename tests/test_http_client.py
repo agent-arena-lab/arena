@@ -1,4 +1,4 @@
-"""Exercises the real HTTP client + `coopsab check` against a minimal fake llama-server."""
+"""Exercises the real HTTP client + `arena check` against a minimal fake llama-server."""
 
 import json
 import threading
@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from coopsab.cli import main
+from arena.cli import main
 
 
 class FakeLlama(BaseHTTPRequestHandler):

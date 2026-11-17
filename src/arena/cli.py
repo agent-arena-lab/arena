@@ -1,4 +1,4 @@
-"""Command line interface: ``coopsab <command>``."""
+"""Command line interface: ``arena <command>``."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def cmd_transcript(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="coopsab", description=__doc__)
+    ap = argparse.ArgumentParser(prog="arena", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("check", help="smoke test llama-server (health, alias, tool calls, reasoning)")
@@ -184,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("coding-sheet", help="blinded coding package for human/LLM coders")
     p.add_argument("exp_dir")
     p.add_argument("--out", required=True)
-    p.add_argument("--salt", default="coopsab")
+    p.add_argument("--salt", default="arena")
     p.set_defaults(fn=cmd_coding)
 
     p = sub.add_parser("kappa", help="Cohen's kappa between two filled coding sheets")

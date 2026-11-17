@@ -94,24 +94,24 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 
 **Phase 1 – Repo**
 - [x] GitHub-Repo `agent-arena-lab/arena`
-- [x] Harness (`src/coopsab`), Configs, Prompts, Skripte, Mock-LLM, Tests
+- [x] Harness (`src/arena`), Configs, Prompts, Skripte, Mock-LLM, Tests
 - [x] `install.sh` / `uninstall.sh`
 
 **Phase 2 – Lokal auf dem Mac testen**
 - [ ] Installation per Einzeiler auf dem Mac durchspielen
-- [ ] `coopsab check` für beide Qwen-Varianten grün (Tool-Calls `native`, Thinking getrennt)
+- [ ] `arena check` für beide Qwen-Varianten grün (Tool-Calls `native`, Thinking getrennt)
 - [ ] Smoke-Läufe von Hand lesen: verhalten sich die Modelle sinnvoll?
 
 **Phase 3 – Jetson**
 - [ ] Zugang klären, Installation per Einzeiler
-- [ ] `coopsab check` grün inkl. tok/s (GPU-Offload aktiv), llama.cpp-Version pinnen
+- [ ] `arena check` grün inkl. tok/s (GPU-Offload aktiv), llama.cpp-Version pinnen
 - [ ] Pilot: 1 Lauf pro Zelle (12 Läufe), Laufzeit hochrechnen
 - [ ] Update an den Betreuer (60 Läufe, Modellwahl)
 
 **Phase 4 – Hauptläufe und Auswertung**
 - [ ] 60 Kernläufe
-- [ ] Kodierbogen (`coopsab coding-sheet`), unabhängige Doppelkodierung, `coopsab kappa`
-- [ ] `coopsab analyze`, optionale Zusatzbatches
+- [ ] Kodierbogen (`arena coding-sheet`), unabhängige Doppelkodierung, `arena kappa`
+- [ ] `arena analyze`, optionale Zusatzbatches
 
 **Phase 5 – Arbeit schreiben**
 - [ ] Related Work, Methodik, Ergebnisse, Limitationen (MABA-Vorlage)

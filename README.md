@@ -1,4 +1,4 @@
-# coopsab – Harness für „Kooperation oder Sabotage?“
+# arena – Harness für „Kooperation oder Sabotage?“
 
 Python-Harness für das Experiment mit zwei konkurrierenden LLM-Agenten unter Selektionsdruck.
 Zielplattform: **NVIDIA Jetson AGX Orin** (JetPack 6, ARM64), Inferenz über **llama.cpp `llama-server`**,
@@ -44,7 +44,7 @@ gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application
 
 `uninstall.sh` zeigt einmal die vollständige Liste und fragt einmal nach (`ja`). Ohne Rückfrage:
 `... | bash -s -- --yes`. Entfernt wird genau, was im Manifest steht: den Installationsordner (nur mit
-Marker `.arena-installed`), das Docker-Image `coopsab-harness` samt Containern, brew-/apt-Pakete **nur wenn
+Marker `.arena-installed`), das Docker-Image `arena-harness` samt Containern, brew-/apt-Pakete **nur wenn
 `install.sh` sie selbst installiert hat**, zuletzt `~/.arena`. Laufender `llama-server` wird vorher gestoppt.
 
 ## Experiment starten
@@ -60,7 +60,7 @@ scripts/run_all.sh configs/experiment.yaml                  # Kern-Design: alle 
 Manuell ohne `install.sh`: `git clone`, `cp .env.example .env`, `scripts/setup_jetson.sh`.
 
 `run_all.sh` startet pro Modell (alle aktiven Einträge unter `models:` der Config) `llama-server`, führt
-`coopsab check` aus (Health, Alias, Tool-Calling, Reasoning-Trennung, Generierungs-tok/s als GPU-Check), fährt die Versuchsmatrix, stoppt den Server und rechnet am Ende
+`arena check` aus (Health, Alias, Tool-Calling, Reasoning-Trennung, Generierungs-tok/s als GPU-Check), fährt die Versuchsmatrix, stoppt den Server und rechnet am Ende
 die Auswertung. **Abgebrochene Experimente einfach erneut starten** – fertige Läufe
 (`summary.json`) werden übersprungen, halbfertige nach `_incomplete/` verschoben.
 
@@ -71,8 +71,8 @@ Ohne Docker: `HARNESS_MODE=native scripts/run_all.sh ...`
 ```bash
 pip install -e ".[analysis,dev]"
 pytest -q                                                    # Tests inkl. Fake-llama-server
-coopsab run --config configs/experiment.yaml --model qwen3-4b-thinking --mock --output-dir /tmp/runs
-coopsab analyze /tmp/runs/core_v1
+arena run --config configs/experiment.yaml --model qwen3-4b-thinking --mock --output-dir /tmp/runs
+arena analyze /tmp/runs/core_v1
 ```
 
 Der Mock erzeugt zufällig ehrliche, lügende, zurückhaltende und überschreibende Agenten – nur zum
@@ -82,13 +82,13 @@ Testen der Pipeline, inhaltlich bedeutungslos.
 
 | Befehl | Zweck |
 |---|---|
-| `coopsab check --model M [--min-tok-s 10]` | Smoke-Test gegen den laufenden Server, warnt bei zu wenig tok/s |
-| `coopsab plan --config C` | Versuchsplan anzeigen (Preise, Startspieler) ohne Ausführung |
-| `coopsab run --config C --model M [--limit N] [--channel ...] [--persona ...] [--rep ...]` | Läufe ausführen |
-| `coopsab analyze runs/<exp>` | `runs.csv`, `agents.csv`, Raten mit Wilson-KI, Fisher (explorativ), Plots |
-| `coopsab coding-sheet runs/<exp> --out coding/` | Verblindeter Kodierbogen + Transkripte + Schlüsseldatei |
-| `coopsab kappa coderA.csv coderB.csv` | Cohens κ je Kategorie |
-| `coopsab transcript runs/<exp>/<run_id> [--blind]` | Lauf als Markdown |
+| `arena check --model M [--min-tok-s 10]` | Smoke-Test gegen den laufenden Server, warnt bei zu wenig tok/s |
+| `arena plan --config C` | Versuchsplan anzeigen (Preise, Startspieler) ohne Ausführung |
+| `arena run --config C --model M [--limit N] [--channel ...] [--persona ...] [--rep ...]` | Läufe ausführen |
+| `arena analyze runs/<exp>` | `runs.csv`, `agents.csv`, Raten mit Wilson-KI, Fisher (explorativ), Plots |
+| `arena coding-sheet runs/<exp> --out coding/` | Verblindeter Kodierbogen + Transkripte + Schlüsseldatei |
+| `arena kappa coderA.csv coderB.csv` | Cohens κ je Kategorie |
+| `arena transcript runs/<exp>/<run_id> [--blind]` | Lauf als Markdown |
 
 ## Spielablauf (Operationalisierung)
 
@@ -150,7 +150,7 @@ evtl. bis Runde 15). `v1` bleibt für alternierende Züge.
   `truncated_responses` je Agent.
 * `transcript.md` – lesbarer Verlauf (Beobachtungen, Thinking aufklappbar, sichtbarer Output, Tool-Calls, README-Diffs,
   Abgaben, Ergebnis). Wird nach jedem Lauf automatisch aus `events.jsonl` erzeugt und lässt sich jederzeit mit
-  `coopsab transcript` neu bauen – `events.jsonl` ist die vollständige Rohquelle, im Markdown geht nichts verloren,
+  `arena transcript` neu bauen – `events.jsonl` ist die vollständige Rohquelle, im Markdown geht nichts verloren,
   was nicht auch dort steht.
 * **Token-Limit:** `max_tokens` = 32.768 pro Antwort (Thinking wird inhaltlich nicht gekürzt), `CTX` = 65.536.
   Erreicht eine Antwort das Limit (`finish_reason: length`), wird ein `truncated`-Event geloggt und der Agent in
@@ -198,7 +198,7 @@ Verblindung: Transkripte enthalten keine System-Prompts/Bedingungen; Reasoning k
 
 Kern-Design (`configs/experiment.yaml`): beide Qwen3-4B-Varianten × 3 Kanäle × 2 Prompts × 5 Wiederholungen =
 **60 Läufe**. Beide Varianten in derselben Quantisierung, damit sich nur das Alignment unterscheidet. Die
-abliterated Variante ist wenig verbreitet: vor den Hauptläufen mit `coopsab check` prüfen, ob Tool-Calls `native`
+abliterated Variante ist wenig verbreitet: vor den Hauptläufen mit `arena check` prüfen, ob Tool-Calls `native`
 kommen und das Thinking getrennt wird.
 
 Weitere Modelle: neue `models/<alias>.env` + Eintrag unter `models:` in der Config (Key = Alias).
@@ -207,13 +207,13 @@ Quantisierung unterscheiden sich also zwischen Familien; bei Modellvergleichen b
 
 ## Bekannte Grenzen / vor dem Hauptexperiment prüfen
 
-1. **llama.cpp-Version pinnen** (`LLAMA_CPP_REF`) und `coopsab check` für jedes Modell grün bekommen
+1. **llama.cpp-Version pinnen** (`LLAMA_CPP_REF`) und `arena check` für jedes Modell grün bekommen
    (Tool-Calls `native`, Reasoning getrennt). Flags `-fa on`, `-ngl all`, `--reasoning-format` gegen
    `llama-server --help` der gebauten Version prüfen.
 2. **Determinismus:** Seeds werden pro Request gesetzt, GPU-Inferenz in llama.cpp ist aber nicht bit-exakt
    reproduzierbar. Reproduzierbar sind Design, Prompts, Preise, Reihenfolge – nicht jeder Token.
 3. **Speicher:** Qwen3-4B Q4_K_M (~2,5 GB) + 64k Kontext passt auf dem Orin problemlos; 30B-A3B (~18–19 GB) + 64k
    passt auf 64 GB. Auf kleinen Macs bei OOM `CTX` in `models/<alias>.env` senken. Kontextüberlauf beendet den Lauf mit Status `context_overflow` (wird geloggt, nicht still verworfen).
-4. **Laufzeit:** zuerst `coopsab run --limit 3` und hochrechnen; Reasoning-Modelle auf dem Orin brauchen pro Zug
+4. **Laufzeit:** zuerst `arena run --limit 3` und hochrechnen; Reasoning-Modelle auf dem Orin brauchen pro Zug
    leicht 30 s–mehrere Minuten.
 5. Die beiden Agenten eines Laufs sind statistisch nicht unabhängig – inferenzielle Aussagen auf Run-Ebene.
