@@ -3,7 +3,7 @@
 **Verhalten konkurrierender LLM-Agenten unter Selektionsdruck**
 
 Bachelor-Seminar *Data Driven Enterprise* · Practical Task · Fokus: AI Safety & Security, Agentic AI
-Team: Tom Hente, Constantin Lösch · Betreuer: Prof. Frederik Möller
+Team: Tom Hente, Constantin Lösch
 
 > Status: Planungsphase. Dieses Repo enthält bisher nur den Plan. Die Ordnerstruktur und der Code folgen in Phase 1 und 2.
 
