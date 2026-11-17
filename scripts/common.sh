@@ -21,8 +21,8 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 export HOST_UID="$(id -u)" HOST_GID="$(id -g)"
 export PATH="/usr/local/cuda/bin:$PATH"
 
-log() { printf '\033[1;34m[coopsab]\033[0m %s\n' "$*" >&2; }
-die() { printf '\033[1;31m[coopsab] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+log() { printf '\033[1;34m[arena]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m[arena] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 load_model_env() {
   local name="$1" f="$ROOT_DIR/models/$1.env"
@@ -48,6 +48,6 @@ harness() {
   if [[ "$HARNESS_MODE" == "docker" ]]; then
     (cd "$ROOT_DIR" && docker compose -f docker/docker-compose.yml run --rm harness "$@")
   else
-    "$ROOT_DIR/.venv/bin/coopsab" "$@"
+    "$ROOT_DIR/.venv/bin/arena" "$@"
   fi
 }

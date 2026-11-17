@@ -1,5 +1,5 @@
 # Erweitertes Design (alle Faktoren): 4 Kanäle x 3 Prompts x 2 Regeln x 5 Wdh. = 120 Läufe pro Modell.
-# Auf dem Jetson grob planen: Laufzeit pro Lauf mit `coopsab run --limit 3` messen und hochrechnen.
+# Auf dem Jetson grob planen: Laufzeit pro Lauf mit `arena run --limit 3` messen und hochrechnen.
 name: full_v1
 prompt_version: v3
 prompts_dir: prompts

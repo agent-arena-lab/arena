@@ -12,5 +12,5 @@ RUN pip install ".[analysis,dev]" && useradd -m -u 1000 harness
 COPY tests ./tests
 # configs/, prompts/ and runs/ are bind-mounted at runtime (see docker-compose.yml)
 USER harness
-ENTRYPOINT ["coopsab"]
+ENTRYPOINT ["arena"]
 CMD ["--help"]

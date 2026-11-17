@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from coopsab.analysis import analyze, coding_sheet, cohens_kappa, kappa_report, wilson
-from coopsab.config import ExperimentCfg
-from coopsab.mock import MockClient
-from coopsab.runner import build_specs, run_experiment
+from arena.analysis import analyze, coding_sheet, cohens_kappa, kappa_report, wilson
+from arena.config import ExperimentCfg
+from arena.mock import MockClient
+from arena.runner import build_specs, run_experiment
 
 
 def make_cfg(tmp_path, **factors):

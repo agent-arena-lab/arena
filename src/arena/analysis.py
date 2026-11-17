@@ -279,7 +279,7 @@ def analyze(exp_dir: Path, out_dir: Path | None = None) -> Path:
 
 
 # --------------------------------------------------------------------------- coding sheet / kappa
-def coding_sheet(exp_dir: Path, out_dir: Path, salt: str = "coopsab") -> Path:
+def coding_sheet(exp_dir: Path, out_dir: Path, salt: str = "arena") -> Path:
     """Blinded coding package: sheet (one row per agent & run), key file, blinded transcripts.
 
     Coders only see `coding_sheet.csv` and `transcripts/`. The key maps code ids back to

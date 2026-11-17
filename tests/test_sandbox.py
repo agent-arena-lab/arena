@@ -1,6 +1,6 @@
 import pytest
 
-from coopsab.sandbox import SandboxError, Workspace
+from arena.sandbox import SandboxError, Workspace
 
 
 @pytest.fixture
