@@ -349,7 +349,7 @@ gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application
 - [ ] llama-server mit CUDA im Container, GGUFs ablegen
 - [ ] Benchmark grün (GPU-Offload aktiv)
 - [ ] Pilot: 1 Lauf pro Zelle (12 Läufe), offene Entscheidungen festlegen
-- [ ] Update an Prof. Möller (Umfang 60 Läufe, Modellwahl)
+- [ ] Update an den Betreuer (Umfang 60 Läufe, Modellwahl)
 
 **Phase 5 – Hauptläufe und Auswertung**
 - [ ] 60 Kernläufe (30 aligned + 30 abliterated)
