@@ -1,0 +1,30 @@
+# Einstellungen für Modelle, die nicht unter `models:` der Experiment-Config stehen
+# (z. B. per scripts/models.sh choose ausgewählt). Steht ein Modell in der Config, gilt die Config.
+# Welche Quelle benutzt wurde, steht pro Lauf in meta.json (model_cfg_source).
+# Sampling laut Qwen-Model-Cards (2507): Thinking T 0.6 / top_p 0.95 / top_k 20,
+# Instruct T 0.7 / top_p 0.8 / top_k 20, jeweils min_p 0.
+models:
+  qwen3-4b-thinking:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+    max_tokens: 32768
+  qwen3-4b-thinking-abliterated:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+    max_tokens: 32768
+  qwen3-4b-instruct:
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
+    max_tokens: 2048
+  qwen3-4b-instruct-abliterated:
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
+    max_tokens: 2048
+  qwen3-30b-a3b-instruct:
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
+    max_tokens: 2048
+  qwen3-30b-a3b-instruct-abliterated:
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
+    max_tokens: 2048
+  qwen3-30b-a3b-thinking:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+    max_tokens: 32768
+  qwen3-30b-a3b-thinking-abliterated:
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+    max_tokens: 32768

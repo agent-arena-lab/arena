@@ -17,7 +17,7 @@ from typing import Any, Callable
 from . import __version__
 from .analysis import render_transcript
 from .autocode import code_run
-from .config import ExperimentCfg
+from .config import ExperimentCfg, resolve_model
 from .game import Game, RunSpec
 from .llm import LLMClient
 from .logger import EventLogger, read_events, utc_now, write_json
@@ -97,6 +97,7 @@ def run_one(
         "true_total": spec.true_total,
         "model_alias": spec.model,
         "model_cfg": cfg.models[spec.model].model_dump(),
+        "model_cfg_source": "catalog" if spec.model in cfg._catalog_models else "config",
         "server_info": server_info,
         "prompt_version": prompts.version,
         "prompt_sha256": prompts.sha256,
@@ -159,8 +160,9 @@ def run_experiment(
     force: bool = False,
     print_fn: Callable[[str], None] = print,
 ) -> list[dict[str, Any]]:
-    if model not in cfg.models:
-        raise SystemExit(f"Model '{model}' not in config.models: {list(cfg.models)}")
+    model_cfg_source = resolve_model(cfg, model)
+    if model_cfg_source == "catalog":
+        print_fn(f"[arena] settings for '{model}' taken from {cfg.model_catalog}")
     prompts = PromptSet.load(cfg.prompts_dir, cfg.prompt_version)
     config_sha = hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
     server_info = client.server_info()

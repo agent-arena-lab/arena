@@ -47,6 +47,61 @@ curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/uninstal
 Marker `.arena-installed`), das Docker-Image `arena-harness` samt Containern, brew-/apt-Pakete **nur wenn
 `install.sh` sie selbst installiert hat**, zuletzt `~/.arena`. Laufender `llama-server` wird vorher gestoppt.
 
+## Modell auswählen (Speedtest)
+
+Bevor die Hauptläufe starten, lohnt sich ein Speedtest der Kandidaten auf genau dem Gerät, auf dem gerechnet
+wird. Das ist besonders auf dem Jetson (CUDA) wichtig: Dort zeigt der Test auch, ob das Modell **komplett
+auf der GPU** liegt. Liegen Schichten auf der CPU, wird es um ein Vielfaches langsamer.
+
+```bash
+cd ~/arena
+scripts/models.sh bench      # Menü: Nummern wählen, fehlende Modelle laden, jedes Modell messen
+scripts/models.sh choose     # Menü: Modelle für die Läufe festlegen (schreibt ARENA_MODELS in .env)
+scripts/run_all.sh configs/experiment.yaml   # nimmt jetzt die ausgewählten Modelle
+```
+
+Ohne Menü: `scripts/models.sh bench -y qwen3-4b-instruct qwen3-4b-thinking` bzw.
+`scripts/models.sh choose qwen3-4b-thinking`. Die letzte Tabelle zeigt `scripts/models.sh list`.
+
+**Was `bench` pro Modell macht:** `llama-server` mit den echten Einstellungen aus `models/<alias>.env` starten
+(gleicher Kontext, gleiche Flags wie im Experiment), 1 Aufwärmlauf + 3 Messläufe, dann Server stoppen.
+Vor dem Download zeigt es die Größe an und fragt nach. Modelle, für die das Gerät zu wenig RAM hat, werden
+übersprungen.
+
+| Spalte | Bedeutung |
+|---|---|
+| `pp tok/s` | Prompt-Verarbeitung: wie schnell lange Verläufe und README-Inhalte eingelesen werden |
+| `tg tok/s` | Generierung: bestimmt fast allein die Laufzeit, vor allem bei Thinking-Modellen |
+| `Tool-Call` | `native` = das Modell ruft Werkzeuge korrekt auf. `FEHLT` = für das Experiment ungeeignet |
+| `GPU` | Backend (CUDA/Metal) und ausgelagerte Schichten, z. B. `37/37`. Weniger als alle = Problem |
+| `min/Lauf`, `h/45 Läufe` | Grobe Hochrechnung: Thinking ~60k, Instruct ~6k generierte Tokens pro Lauf |
+
+Ergebnisse landen in `runs/_bench/results.jsonl` (jede Messung, mit Datum und Host) und
+`runs/_bench/latest.md`. Auf einem 8-GB-Mac den Kontext verkleinern: `ARENA_CTX=16384 scripts/models.sh bench`.
+
+### Verfügbare Modelle
+
+Alle Q4_K_M. Repos und Dateinamen sind in der jeweiligen `models/<alias>.env` dokumentiert (geprüft 18.11.2026).
+
+| Alias | Typ | Größe | RAM | Quelle |
+|---|---|---|---|---|
+| `qwen3-4b-thinking` | Thinking, mit Alignment | 2.5 GB | 8 GB | unsloth/Qwen3-4B-Thinking-2507-GGUF |
+| `qwen3-4b-thinking-abliterated` | Thinking, ohne Ablehnungen | 2.5 GB | 8 GB | mradermacher/Huihui-Qwen3-4B-Thinking-2507-abliterated-GGUF |
+| `qwen3-4b-instruct` | Instruct, mit Alignment | 2.5 GB | 8 GB | unsloth/Qwen3-4B-Instruct-2507-GGUF |
+| `qwen3-4b-instruct-abliterated` | Instruct, ohne Ablehnungen | 2.5 GB | 8 GB | mradermacher/Huihui-Qwen3-4B-Instruct-2507-abliterated-GGUF |
+| `qwen3-30b-a3b-thinking` | Thinking, MoE (3B aktiv) | 18.6 GB | 32 GB, nur Jetson | unsloth/Qwen3-30B-A3B-Thinking-2507-GGUF |
+| `qwen3-30b-a3b-thinking-abliterated` | Thinking, ohne Ablehnungen | 18.6 GB | 32 GB, nur Jetson | mradermacher/Huihui-Qwen3-30B-A3B-Thinking-2507-abliterated-GGUF |
+| `qwen3-30b-a3b-instruct` | Instruct, MoE (3B aktiv) | 18.6 GB | 32 GB, nur Jetson | unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF |
+| `qwen3-30b-a3b-instruct-abliterated` | Instruct, ohne Ablehnungen | 18.6 GB | 32 GB, nur Jetson | mradermacher/Huihui-Qwen3-30B-A3B-Instruct-2507-abliterated-GGUF |
+
+Steht ein ausgewähltes Modell nicht unter `models:` der Experiment-Config, nimmt der Harness Sampling und
+`max_tokens` aus `configs/model_catalog.yaml` (Qwen-Empfehlung: Thinking T 0.6 / top-p 0.95, Instruct
+T 0.7 / top-p 0.8, jeweils top-k 20; Instruct `max_tokens` 2048). `meta.json` vermerkt pro Lauf
+`model_cfg_source: config|catalog`.
+
+> Hinweis Instruct-Modelle: Sie schreiben kein Thinking. Ohne zusätzliches Notiz-Werkzeug (geplant für v6:
+> `private_note`) lässt sich ihre Absicht nur aus Nachrichten und Aktionen ablesen, nicht aus dem Reasoning.
+
 ## Experiment starten
 
 ```bash
@@ -54,7 +109,7 @@ cd ~/arena
 sudo nvpmodel -m 0 && sudo jetson_clocks    # nur Jetson, empfohlen: konstante Taktraten (Zeitmessung!)
 
 scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking     # Funktionstest
-scripts/run_all.sh configs/experiment.yaml                  # Kern-Design: alle Modelle aus der Config nacheinander
+scripts/run_all.sh configs/experiment.yaml                  # ausgewählte Modelle (models.sh choose), sonst alle aus der Config
 ```
 
 Manuell ohne `install.sh`: `git clone`, `cp .env.example .env`, `scripts/setup_jetson.sh`.
@@ -248,8 +303,9 @@ kommen und das Thinking getrennt wird.
 Weitere Modelle: neue `models/<alias>.env` + Eintrag unter `models:` in der Config (Key = Alias).
 Sampling = Qwen-Empfehlung für Thinking-Modelle (T 0.6, top-p 0.95, top-k 20), für beide Varianten identisch.
 
-`install.sh` und `scripts/download_models.sh` (ohne Argumente) laden genau die Modelle aus `models/*.env`,
-also beide Kernmodelle.
+`install.sh` lädt die beiden Kernmodelle. `scripts/download_models.sh` ohne Argumente lädt die mit
+`scripts/models.sh choose` ausgewählten Modelle, sonst die Modelle aus `configs/experiment.yaml`;
+`--all` lädt den ganzen Katalog (inkl. 30B, je ~19 GB). Auswahl und Speedtest: siehe „Modell auswählen“.
 
 ## Bekannte Grenzen / vor dem Hauptexperiment prüfen
 

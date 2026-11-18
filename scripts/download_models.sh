@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Downloads GGUFs listed in models/*.env into $MODELS_DIR/<alias>/
-# Usage: scripts/download_models.sh [model ...]   (default: all)
+# Usage: scripts/download_models.sh [model ...]
+#   default: ARENA_MODELS from .env (scripts/models.sh choose), else the models of configs/experiment.yaml.
+#   All catalog models (incl. 30B, ~19 GB each): scripts/download_models.sh --all
 source "$(dirname "$0")/common.sh"
 
 HF="$ROOT_DIR/.venv/bin/hf"
@@ -8,7 +10,9 @@ HF="$ROOT_DIR/.venv/bin/hf"
 [[ -n "$HF" ]] || die "Hugging Face CLI not found (pip install 'huggingface_hub[cli]')"
 
 models=("$@")
-if [[ ${#models[@]} -eq 0 ]]; then while IFS= read -r m; do models+=("$m"); done < <(all_models); fi
+if [[ "${models[0]:-}" == "--all" ]]; then models=(); while IFS= read -r m; do models+=("$m"); done < <(all_models)
+elif [[ ${#models[@]} -eq 0 && -n "${ARENA_MODELS:-}" ]]; then read -r -a models <<<"$ARENA_MODELS"
+elif [[ ${#models[@]} -eq 0 ]]; then while IFS= read -r m; do models+=("$m"); done < <(config_models "$ROOT_DIR/configs/experiment.yaml"); fi
 for m in "${models[@]}"; do
   load_model_env "$m"
   if [[ -n "$MODEL_PATH" ]]; then log "$m: present ($MODEL_PATH)"; continue; fi

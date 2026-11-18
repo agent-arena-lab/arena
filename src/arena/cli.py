@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from .config import load_config
+from .config import load_config, resolve_model
 
 
 def _client(cfg, mock: bool):
@@ -36,8 +36,12 @@ def cmd_check(args) -> int:
     aliases = c.served_aliases()
     print("served aliases:", aliases)
     model = args.model or (aliases[0] if aliases else next(iter(cfg.models)))
-    if model not in cfg.models:
-        print(f"WARN: '{model}' has no entry in config.models; using defaults of first model")
+    try:
+        src = resolve_model(cfg, model)
+        if src == "catalog":
+            print(f"settings for '{model}' taken from {cfg.model_catalog}")
+    except SystemExit:
+        print(f"WARN: '{model}' has no entry in config.models or the model catalog; using defaults of first model")
     mcfg = cfg.models.get(model) or next(iter(cfg.models.values()))
     props = c.server_info().get("props", {})
     print("model_path:", props.get("model_path"), "| n_ctx:", (props.get("default_generation_settings") or {}).get("n_ctx"))
@@ -79,6 +83,8 @@ def cmd_plan(args) -> int:
 
     cfg = load_config(args.config)
     models = [args.model] if args.model else list(cfg.models)
+    for m in models:
+        resolve_model(cfg, m)
     total = 0
     for m in models:
         specs = build_specs(cfg, m)

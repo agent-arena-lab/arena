@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 Channel = Literal["direct", "readme", "none", "limited"]
 Persona = Literal["neutral", "survive", "cooperate", "deceive"]  # deceive: nur Zusatz-Batch (prompts/v4)
@@ -85,6 +85,10 @@ class ExperimentCfg(BaseModel):
     log_full_requests: bool = False
     llm: LLMCfg = Field(default_factory=LLMCfg)
     models: dict[str, ModelCfg]
+    # Fallback for models that are not listed under `models:` (e.g. chosen with scripts/models.sh).
+    # Relative paths are resolved against the directory of the config file.
+    model_catalog: Path | None = Path("model_catalog.yaml")
+    _catalog_models: set[str] = PrivateAttr(default_factory=set)
     factors: Factors = Field(default_factory=Factors)
     game: GameCfg = Field(default_factory=GameCfg)
 
@@ -102,4 +106,25 @@ def load_config(path: str | Path) -> ExperimentCfg:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     cfg = ExperimentCfg.model_validate(data)
     # Resolve relative paths against the working directory (container: /app).
+    if cfg.model_catalog is not None and not cfg.model_catalog.is_absolute():
+        cfg.model_catalog = path.parent / cfg.model_catalog
     return cfg
+
+
+def resolve_model(cfg: ExperimentCfg, model: str) -> str:
+    """Make sure `model` has settings in cfg.models.
+
+    Returns "config" if the experiment config lists the model, "catalog" if its settings were taken
+    from the model catalog (configs/model_catalog.yaml). Raises SystemExit if neither knows it.
+    """
+    if model in cfg.models:
+        return "catalog" if model in cfg._catalog_models else "config"
+    cat = cfg.model_catalog
+    if cat is not None and cat.exists():
+        entries = (yaml.safe_load(cat.read_text(encoding="utf-8")) or {}).get("models") or {}
+        if model in entries:
+            cfg.models[model] = ModelCfg.model_validate(entries[model])
+            cfg._catalog_models.add(model)
+            return "catalog"
+    raise SystemExit(f"Model '{model}' is neither in config.models {list(cfg.models)} "
+                     f"nor in the model catalog ({cat}).")

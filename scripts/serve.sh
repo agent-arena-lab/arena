@@ -22,7 +22,9 @@ start() {
   [[ -x "$LLAMA_SERVER" ]] || die "llama-server not found at $LLAMA_SERVER (run install.sh or scripts/setup_jetson.sh)"
   [[ -n "$MODEL_PATH" ]] || die "no GGUF for $model in $MODELS_DIR/$ALIAS (run scripts/download_models.sh $model)"
   stop
+  CTX="${ARENA_CTX:-$CTX}"   # e.g. ARENA_CTX=16384 on an 8 GB Mac
   local logf="$LOG_DIR/${ALIAS}_$(date +%Y%m%d-%H%M%S).log"
+  echo "$logf" >"$STATE_DIR/llama-server.logpath"
   log "starting $ALIAS from $MODEL_PATH (ctx $CTX) -> $logf"
   # --parallel 1: agents are computed one after another (logically simultaneous, see game.py); -ngl all: full offload (unified memory)
   # --jinja: required for tool calling + reasoning parsing; flags verified against llama-server --help

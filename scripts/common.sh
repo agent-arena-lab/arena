@@ -27,7 +27,7 @@ die() { printf '\033[1;31m[arena] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 load_model_env() {
   local name="$1" f="$ROOT_DIR/models/$1.env"
   [[ -f "$f" ]] || die "unknown model '$name' (no $f)"
-  unset ALIAS HF_REPO HF_INCLUDE MODEL_GLOB CTX EXTRA_ARGS
+  unset ALIAS HF_REPO HF_INCLUDE MODEL_GLOB CTX EXTRA_ARGS TYPE SIZE_GB MIN_RAM_GB
   # shellcheck disable=SC1090
   source "$f"
   MODEL_PATH="$(find "$MODELS_DIR/$ALIAS" -maxdepth 3 -name "$MODEL_GLOB" 2>/dev/null | sort | head -n1 || true)"

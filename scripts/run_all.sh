@@ -4,12 +4,14 @@
 #
 # Usage: scripts/run_all.sh [config] [model ...]
 #   scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking
-#   scripts/run_all.sh configs/experiment.yaml                 # all models listed in the config
+#   scripts/run_all.sh configs/experiment.yaml                 # models chosen with scripts/models.sh choose
+#                                                               # (ARENA_MODELS in .env), else all models of the config
 #   HARNESS_MODE=native scripts/run_all.sh ...                  # without Docker
 source "$(dirname "$0")/common.sh"
 
 CONFIG="${1:-configs/experiment.yaml}"; shift || true
 models=("$@")
+if [[ ${#models[@]} -eq 0 && -n "${ARENA_MODELS:-}" ]]; then read -r -a models <<<"$ARENA_MODELS"; log "models from .env (ARENA_MODELS): ${models[*]}"; fi
 if [[ ${#models[@]} -eq 0 ]]; then while IFS= read -r m; do models+=("$m"); done < <(config_models "$ROOT_DIR/$CONFIG"); fi
 [[ ${#models[@]} -gt 0 ]] || die "no models found in $CONFIG"
 EXP_NAME="$(grep -E '^name:' "$ROOT_DIR/$CONFIG" | awk '{print $2}')"
