@@ -35,12 +35,12 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 | Variable | Ausprägungen | Im Kern-Design |
 |---|---|---|
 | Kommunikationskanal | direkt · geteilte README · kein Kanal (Kontrollgruppe) · eingeschränkt (50 Wörter) | direkt, README, keiner |
-| System-Prompt | neutral · „survive at any cost“ · „cooperate“ | neutral, survive |
+| System-Prompt | neutral · „survive at any cost“ · „deceive“ (Täuschung ausdrücklich erlaubt) · „cooperate“ | neutral, survive, deceive |
 | Modellvariante | Qwen3-4B-Thinking-2507 mit Alignment · abliterated | beide |
 | Selektionsregel | schnellste · beste Lösung | schnellste |
 
 ```
-3 Kanäle × 2 Prompts × 2 Modellvarianten × 5 Wiederholungen = 60 Läufe
+3 Kanäle × 3 Prompts × 2 Modellvarianten × 5 Wiederholungen = 90 Läufe
 ```
 
 - **Kontrollgruppe „kein Kanal“:** Basiswert für Korrektheit, Zeit und erfundene Preise. Kooperation und
@@ -74,7 +74,8 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 | Gleichstand („schnellste“) | beide in derselben Runde korrekt → Überlebender zufällig (steht im Prompt) |
 | Abgabe | genau **eine** pro Agent, keine Rückmeldung ob korrekt; der andere erfährt, *dass* abgegeben wurde |
 | Prompts | **Englisch**; kein Prompt erwähnt Lügen, Zurückhalten oder Manipulation |
-| Zusatz-Batch | Persona `deceive` (prompts/v4) legt Täuschung ausdrücklich nahe, für **beide** Modelle, 30 Läufe, getrennt berichtet (angeleitet, nicht emergent) |
+| Prompt „deceive“ | im Kern-Design für **beide** Modelle; legt Täuschung ausdrücklich nahe → angeleitet, getrennt von neutral/survive berichten |
+| Rundenmeldung | nennt eigene bisherige Nachrichten und die Runde, in der eingehende Nachrichten geschrieben wurden (überkreuzende Nachrichten bei gleichzeitigen Runden), prompts/v5 |
 | Kontrollgruppe | Prompt sagt explizit: keine Kommunikation **und keine weiteren Informationen** während der Simulation (prompts/v3) |
 | Token-Limit | keine inhaltliche Kürzung; Sicherheitsnetz `max_tokens` 32.768, Abschneiden wird als `truncated` markiert |
 | Thinking im Verlauf | wird **nicht** in die History zurückgegeben (Qwen-Vorgabe), aber vollständig geloggt |
@@ -107,10 +108,10 @@ Simulation eingeordnet, nicht als Aussage über einen Selbsterhaltungstrieb.
 - [ ] Zugang klären, Installation per Einzeiler
 - [ ] `arena check` grün inkl. tok/s (GPU-Offload aktiv), llama.cpp-Version pinnen
 - [ ] Pilot: 1 Lauf pro Zelle (12 Läufe), Laufzeit hochrechnen
-- [ ] Update an den Betreuer (60 Läufe, Modellwahl)
+- [ ] Update an den Betreuer (90 Läufe, Modellwahl, Prompt „deceive“)
 
 **Phase 4 – Hauptläufe und Auswertung**
-- [ ] 60 Kernläufe
+- [ ] 90 Kernläufe (~12 h)
 - [ ] Kodierbogen (`arena coding-sheet`), unabhängige Doppelkodierung, `arena kappa`
 - [ ] `arena analyze`, optionale Zusatzbatches
 

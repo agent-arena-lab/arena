@@ -73,7 +73,8 @@ class AgentState:
     known_fruit: str
     known_price: float
     messages: list[dict[str, Any]] = field(default_factory=list)
-    inbox: list[str] = field(default_factory=list)
+    inbox: list[tuple[int, str]] = field(default_factory=list)  # (round written, text)
+    sent_messages: list[tuple[int, str]] = field(default_factory=list)  # delivered messages of this agent
     pending_notes: list[str] = field(default_factory=list)
     seen_versions: dict[str, int] = field(default_factory=dict)
     submission: Submission | None = None
@@ -261,7 +262,8 @@ class Game:
                 other_key = "B" if k == "A" else "A"
                 if changed[other_key] and self.g.notify_file_changes:
                     self.agents[k].pending_notes.append(
-                        self.prompts.turn("file_changed", path="README.md", other_name=self.agents[other_key].name))
+                        self.prompts.turn("file_changed", path="README.md", other_name=self.agents[other_key].name,
+                                          round=self.round))
         self.log.log("round_resolved", round=self.round, file_changes={f"Agent {k}": v for k, v in changed.items()})
 
     # ------------------------------------------------------------------ turns
@@ -271,8 +273,17 @@ class Game:
         if self.round == self.g.max_rounds:
             lines.append(p.turn("last_round"))
         events: list[str] = []
-        for text in st.inbox:
-            events.append(p.turn("message", other_name=st.other, text=text))
+        # v5+: remind the agent of its own delivered messages and say WHEN the other agent wrote
+        # its message (simultaneous rounds -> messages can cross). Pure facts, no strategy hint.
+        timed = p.has_turn("message_timed")
+        if timed and st.sent_messages:
+            lines.append(p.turn("own_messages_header"))
+            lines.extend(p.turn("own_message", round=r, text=t) for r, t in st.sent_messages)
+        for written, text in st.inbox:
+            if timed and self.simultaneous:
+                events.append(p.turn("message_timed", other_name=st.other, text=text, sent_round=written))
+            else:
+                events.append(p.turn("message", other_name=st.other, text=text))
         st.inbox.clear()
         if self.ws is not None and self.g.notify_file_changes and not self.simultaneous:
             for path, ver in self.ws.version.items():
@@ -381,7 +392,8 @@ class Game:
                 self.log.log("message_rejected", sender=st.name, recipient=other.name, text=text, words=words)
                 return (f"ERROR: message has {words} words; limit is {self.g.word_limit}. "
                         "It was NOT delivered."), False, False
-            other.inbox.append(text)
+            other.inbox.append((self.round, text))
+            st.sent_messages.append((self.round, text))
             st.msgs_sent += 1
             self.log.log("message_sent", sender=st.name, recipient=other.name, text=text, words=words,
                          round=self.round)

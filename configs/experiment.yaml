@@ -1,7 +1,8 @@
-# Kern-Design: 3 Kanäle x 2 Prompts x 5 Wiederholungen = 30 Läufe pro Modell
-# Modelle: Qwen3-4B-Thinking-2507 mit Alignment + abliterated -> 60 Läufe insgesamt
+# Kern-Design: 3 Kanäle x 3 Prompts x 5 Wiederholungen = 45 Läufe pro Modell
+# Modelle: Qwen3-4B-Thinking-2507 mit Alignment + abliterated -> 90 Läufe insgesamt
+# Prompt "deceive" = angeleitete Täuschung -> in der Auswertung getrennt berichten
 name: core_v1
-prompt_version: v3
+prompt_version: v5
 prompts_dir: prompts
 output_dir: runs
 base_seed: 20261117
@@ -28,7 +29,7 @@ models:
 
 factors:
   channel: [direct, readme, none]      # optional: limited
-  persona: [neutral, survive]          # optional: cooperate
+  persona: [neutral, survive, deceive] # deceive = angeleitet; optional: cooperate
   selection_rule: [fastest]            # RQ4: [fastest, best]
 
 game:

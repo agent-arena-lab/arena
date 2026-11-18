@@ -74,5 +74,8 @@ class PromptSet:
             persona=fmt(self.data["personas"][persona], **common),
         ).strip()
 
+    def has_turn(self, key: str) -> bool:
+        return key in self.data["turn"]
+
     def turn(self, key: str, **kw: Any) -> str:
         return fmt(self.data["turn"][key], **kw)
