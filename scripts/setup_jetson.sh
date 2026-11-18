@@ -44,7 +44,7 @@ cmake --build "$LLAMA_DIR/build" --config Release -j"$(nproc)" --target llama-se
 # --- 3. venv -----------------------------------------------------------------
 python3 -m venv "$ROOT_DIR/.venv"
 "$ROOT_DIR/.venv/bin/pip" install -q --upgrade pip
-"$ROOT_DIR/.venv/bin/pip" install -q "huggingface_hub[cli]" -e "$ROOT_DIR[analysis,dev]"
+"$ROOT_DIR/.venv/bin/pip" install -q huggingface_hub -e "$ROOT_DIR[analysis,dev]"
 log "venv ready: $ROOT_DIR/.venv"
 
 # --- 4. docker image -----------------------------------------------------------

@@ -12,6 +12,11 @@
 #   brew-/apt-Pakete, die install.sh selbst installiert hat, und zuletzt ~/.arena.
 set -euo pipefail
 
+# Alles steckt in main(): Bei `curl ... | bash` liest bash das Skript sonst stückweise aus der Pipe,
+# und Unterprogramme (brew, pip, ...) können den Rest des Skripts von stdin "wegessen".
+# So wird das Skript erst vollständig eingelesen und dann ausgeführt.
+main() {
+
 YES=0
 for a in "$@"; do
   case "$a" in
@@ -106,3 +111,6 @@ fi
 # 5. Protokoll zuletzt
 rm -rf "$ARENA_HOME"
 echo "Fertig. arena ist vollständig entfernt."
+}
+
+main "$@"

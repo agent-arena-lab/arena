@@ -14,6 +14,11 @@
 #   ARENA_SKIP_MODELS=1        Modelle nicht herunterladen
 set -euo pipefail
 
+# Alles steckt in main(): Bei `curl ... | bash` liest bash das Skript sonst stückweise aus der Pipe,
+# und Unterprogramme (brew, pip, ...) können den Rest des Skripts von stdin "wegessen".
+# So wird das Skript erst vollständig eingelesen und dann ausgeführt.
+main() {
+
 REPO="agent-arena-lab/arena"
 ARENA_DIR="${ARENA_DIR:-$HOME/arena}"
 ARENA_BRANCH="${ARENA_BRANCH:-main}"
@@ -70,7 +75,7 @@ if [[ "$OS" == "Darwin" ]]; then
   log "Python-Umgebung (.venv) ..."
   "$PY" -m venv "$ARENA_DIR/.venv"
   "$ARENA_DIR/.venv/bin/pip" install -q --upgrade pip
-  "$ARENA_DIR/.venv/bin/pip" install -q "huggingface_hub[cli]" -e "$ARENA_DIR[analysis,dev]"
+  "$ARENA_DIR/.venv/bin/pip" install -q huggingface_hub -e "$ARENA_DIR[analysis,dev]"
   # Auf dem Mac läuft die Harness nativ: Docker Desktop hat keinen GPU-Zugriff und kein echtes Host-Netz.
   {
     echo "HARNESS_MODE=native"
@@ -109,3 +114,6 @@ Nächste Schritte:
 Alles wieder entfernen (inkl. runs/ – vorher sichern!):
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash
 EOF
+}
+
+main "$@"
