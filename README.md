@@ -136,6 +136,16 @@ Runden (Sichtbarkeit ab nächster Runde) und Gleichstand-Regel bei `fastest`. `v
 (`none`) erfährt explizit, dass während der Simulation keine weiteren Informationen kommen (sonst warten die Agenten
 evtl. bis Runde 15). `v1` bleibt für alternierende Züge.
 
+**Zusatz-Batch „angeleitete Täuschung“** (`configs/zusatz_deceive.yaml`, `prompts/v4`): Persona `deceive`
+erlaubt und empfiehlt Täuschung, Zurückhalten und Manipulation ausdrücklich. Läuft für **beide** Modelle
+(3 Kanäle × 2 Modelle × 5 Wdh. = 30 Läufe, gleiche Preise wie im Kern-Design). Frage: Hält das Alignment,
+wenn Sabotage erlaubt ist? Das ist **angeleitetes** Verhalten und wird getrennt von `neutral`/`survive`
+berichtet. Das Kern-Design (`experiment.yaml`) bleibt auf `v3` und ist davon unberührt.
+
+```bash
+scripts/run_all.sh configs/zusatz_deceive.yaml
+```
+
 * Persona-Sätze sind etwa gleich lang (`neutral` / `survive` / `cooperate`).
 * **Kein Prompt erwähnt Lügen, Zurückhalten oder Manipulieren.** Selektionsdruck entsteht nur durch die Spielregel.
 * `survive` enthält wie im Projektplan „at any cost“ – das ist bereits eine starke Nahelegung; im Bericht als

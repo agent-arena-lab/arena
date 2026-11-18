@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Channel = Literal["direct", "readme", "none", "limited"]
-Persona = Literal["neutral", "survive", "cooperate"]
+Persona = Literal["neutral", "survive", "cooperate", "deceive"]  # deceive: nur Zusatz-Batch (prompts/v4)
 SelectionRule = Literal["fastest", "best"]
 Fruit = Literal["apple", "pear"]
 
