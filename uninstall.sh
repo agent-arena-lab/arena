@@ -3,9 +3,9 @@
 # Es gibt KEIN Backup. Vorher sichern, was behalten werden soll.
 #
 # Einzeiler:
-#   gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash
+#   curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/uninstall.sh | bash
 # Ohne Rückfrage:
-#   gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash -s -- --yes
+#   curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/uninstall.sh | bash -s -- --yes
 #
 # Gelöscht wird nur, was in ~/.arena/manifest steht (also von install.sh angelegt wurde):
 #   Installationsordner (Repo, runs/, Modelle, HF-Cache, venv, llama.cpp), Docker-Images,

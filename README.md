@@ -18,10 +18,10 @@ runs/<exp>/<run_id>/{meta.json, events.jsonl, summary.json, transcript.md, messa
 
 ## Installation mit einem Befehl (Mac oder Jetson)
 
-Das Repo ist privat. Voraussetzung ist die angemeldete GitHub CLI (`gh auth login`).
+Das Repo ist öffentlich, es braucht kein Konto und kein vorheriges Klonen:
 
 ```bash
-gh api repos/agent-arena-lab/arena/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash
 ```
 
 `install.sh` klont das Repo nach `~/arena` (änderbar mit `ARENA_DIR=...`), richtet alles ein und lädt die beiden
@@ -39,7 +39,7 @@ Jede angelegte Ressource wird in `~/.arena/manifest` protokolliert.
 > ⚠️ Löscht **wirklich alles**, auch `runs/` mit allen Versuchsdaten. **Kein Backup.** Vorher sichern.
 
 ```bash
-gh api repos/agent-arena-lab/arena/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/uninstall.sh | bash
 ```
 
 `uninstall.sh` zeigt einmal die vollständige Liste und fragt einmal nach (`ja`). Ohne Rückfrage:

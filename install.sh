@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Installiert arena komplett auf dem Mac (Apple Silicon) oder dem Jetson AGX Orin.
 #
-# Einzeiler (privates Repo -> GitHub CLI muss angemeldet sein: `gh auth login`):
-#   gh api repos/agent-arena-lab/arena/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+# Einzeiler (öffentliches Repo, kein Konto nötig):
+#   curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash
 #
 # Alles, was dieses Skript anlegt oder installiert, wird in ~/.arena/manifest protokolliert.
 # uninstall.sh entfernt genau diese Einträge wieder -> System danach komplett sauber.
@@ -37,11 +37,8 @@ IS_JETSON=0
 
 # --- 1. Repository ------------------------------------------------------------
 log "Klone $REPO ($ARENA_BRANCH) nach $ARENA_DIR ..."
-if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
-  gh repo clone "$REPO" "$ARENA_DIR" -- -q -b "$ARENA_BRANCH"
-else
-  git clone -q -b "$ARENA_BRANCH" "https://github.com/$REPO.git" "$ARENA_DIR"
-fi
+command -v git >/dev/null || die "git fehlt (Mac: xcode-select --install, Jetson: sudo apt install git)."
+git clone -q -b "$ARENA_BRANCH" "https://github.com/$REPO.git" "$ARENA_DIR"
 record dir "$ARENA_DIR"
 touch "$ARENA_DIR/.arena-installed"   # Sicherheitsmarker: uninstall.sh löscht nur Ordner mit diesem Marker
 
@@ -110,5 +107,5 @@ Nächste Schritte:
   scripts/run_all.sh configs/experiment.yaml                  # Kern-Design (60 Läufe)
 
 Alles wieder entfernen (inkl. runs/ – vorher sichern!):
-  gh api repos/$REPO/contents/uninstall.sh -H "Accept: application/vnd.github.raw" | bash
+  curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash
 EOF
