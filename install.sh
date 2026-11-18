@@ -109,7 +109,7 @@ cat >&2 <<EOF
 Nächste Schritte:
   cd $ARENA_DIR
   scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking     # kurzer Funktionstest
-  scripts/run_all.sh configs/experiment.yaml                  # Kern-Design (60 Läufe)
+  scripts/run_all.sh configs/experiment.yaml                  # Kern-Design (90 Läufe)
 
 Alles wieder entfernen (inkl. runs/ – vorher sichern!):
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash
