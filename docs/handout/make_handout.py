@@ -64,8 +64,8 @@ story = [
         ["Was", "Zwei Qwen3-30B-A3B-Thinking-Agenten (mit Alignment und abliterated) kämpfen ums Überleben: "
                 "lügen, Preise zurückhalten, geteilte Dateien fälschen und löschen."],
         ["Gerät", "IONOS Cloud GPU VM <b>H200-S</b>: 1× H200 PCIe (141 GB), 15 vCPUs, 267 GiB RAM, 1 TB, 3 €/h"],
-        ["Dauer", "<b>ca. 1:45–1:55 h</b> inkl. Installation (Läufe selbst: Zeitbudget 70 min + Nachlauf)"],
-        ["Kosten", "<b>ca. 6 €</b> (2 h × 3 €) – VM danach löschen, sonst läuft die Abrechnung weiter"],
+        ["Dauer", "<b>ca. 1:40–2:00 h</b> inkl. Installation (Läufe selbst: Zeitbudget 60 min + Nachlauf)"],
+        ["Kosten", "<b>ca. 5–6 €</b> (max. 2 h × 3 €) – VM danach löschen, sonst läuft die Abrechnung weiter"],
         ["Start", "zwei Befehle: <font name='Mono'>install.sh</font>, danach <font name='Mono'>scripts/battle.sh</font>"],
         ["Ergebnis", "<font name='Mono'>runs/battle_h200/_analysis/highlights.md</font> (beste Läufe zuerst) + Archiv mit Prüfsummen"],
     ], [24, 146], head=False),
@@ -86,7 +86,7 @@ story = [
          "scp 'root@<VM-IP>:~/arena/runs/_exports/*' .\n"
          "arena verify battle_h200_<zeit>.tar.gz     # Vollständigkeit und Prüfsummen"),
     P("Stellschrauben (Umgebungsvariablen vor <font name='Mono'>scripts/battle.sh</font>): "
-      "<font name='Mono'>ARENA_BUDGET_MIN=70</font> Minuten, in denen neue Läufe starten (auf beide Modelle verteilt) · "
+      "<font name='Mono'>ARENA_BUDGET_MIN=60</font> Minuten, in denen neue Läufe starten (auf beide Modelle verteilt) · "
       "<font name='Mono'>ARENA_WORKERS=12</font> parallele Läufe · <font name='Mono'>ARENA_CTX=32768</font> Kontext pro Slot. "
       "Abgebrochen? Einfach neu starten: fertige Läufe werden übersprungen."),
 
@@ -95,13 +95,13 @@ story = [
         ["Phase", "Dauer", "Was passiert"],
         ["Installation", "15–20 min", "apt, CUDA-Toolkit (nur falls nvcc fehlt), llama.cpp-Build; Modelle laden "
                                       "gleichzeitig (~37 GB, im Rechenzentrum ca. 3–10 min)"],
-        ["Modell 1: mit Alignment", "35 min + ~8", "llama-server mit 24 Slots, 12 Läufe gleichzeitig; nach 35 min "
+        ["Modell 1: mit Alignment", "30 min + 8–20", "llama-server mit 24 Slots, 12 Läufe gleichzeitig; nach 30 min "
                                                   "starten keine neuen Läufe, laufende werden fertig gespielt"],
-        ["Modell 2: abliterated", "35 min + ~8", "wie oben"],
+        ["Modell 2: abliterated", "30 min + 8–20", "wie oben"],
         ["Auswertung + Export", "~2 min", "Raten je Zelle, Plots, highlights.md, Archiv mit SHA-256"],
-        ["<b>Gesamt</b>", "<b>~1:45–1:55 h</b>", "Modellwechsel/Laden je ~30 s"],
+        ["<b>Gesamt</b>", "<b>~1:40–2:00 h</b>", "Modellwechsel/Laden je ~30 s"],
     ], [38, 24, 108]),
-    P("Erwartung (Schätzung, nicht gemessen): 30–48 der je 48 geplanten Läufe pro Modell. Die Reihenfolge ist "
+    P("Erwartung (gerechnet, nicht gemessen): konservativ ~500 tok/s gesamt bzw. ~40 tok/s pro Lauf (~19 min pro Spiel) → ~24 Läufe pro Modell; realistisch 600–900 tok/s → 36–48 Läufe. Grafikspeicher: 18,6 GB Modell + 75,5 GB KV-Cache (24 Slots × 32k) ≈ 97 GB von 141 GB. Die Reihenfolge ist "
       "nach Wiederholungen sortiert: erst ist jede der 6 Zellen einmal fertig, dann zweimal usw. Wird das Budget "
       "knapp, bleiben die Zellen also ausgeglichen.", "small"),
 

@@ -54,7 +54,7 @@ Zusatz-Batch mit maximaler Konfliktfläche (nicht das Kern-Design). Handout: [`d
 ```bash
 curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash   # Linux x86_64 + NVIDIA
 tmux new -s arena
-cd ~/arena && scripts/battle.sh      # ARENA_BUDGET_MIN=70  ARENA_WORKERS=12  ARENA_CTX=32768
+cd ~/arena && scripts/battle.sh      # ARENA_BUDGET_MIN=60  ARENA_WORKERS=12  ARENA_CTX=32768
 ```
 
 * `install.sh` erkennt Linux x86_64 mit `nvidia-smi`, installiert bei Bedarf das passende CUDA-Toolkit, baut

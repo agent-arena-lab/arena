@@ -3,8 +3,8 @@
 # Finished runs are skipped on restart (resumable), so after an interruption simply start it again.
 #
 # Usage: scripts/battle.sh [config] [model ...]          (run inside tmux: survives SSH disconnects)
-#   ARENA_BUDGET_MIN=70   total minutes in which NEW runs are started, split evenly across the models
-#                         (runs still going at the cut-off are finished: +~10 min per model)
+#   ARENA_BUDGET_MIN=60   total minutes in which NEW runs are started, split evenly across the models
+#                         (runs still going at the cut-off are finished: +8-20 min per model)
 #   ARENA_WORKERS=12      parallel runs per model (llama-server gets 2 slots per worker)
 #   ARENA_CTX=32768       context per slot (16k thinking + history)
 source "$(dirname "$0")/common.sh"
@@ -17,7 +17,7 @@ models=("$@")
 if [[ ${#models[@]} -eq 0 ]]; then while IFS= read -r m; do models+=("$m"); done < <(config_models "$ROOT_DIR/$CONFIG"); fi
 [[ ${#models[@]} -gt 0 ]] || die "no models found in $CONFIG"
 WORKERS="${ARENA_WORKERS:-12}"
-BUDGET="${ARENA_BUDGET_MIN:-70}"
+BUDGET="${ARENA_BUDGET_MIN:-60}"
 export ARENA_SLOTS=$(( WORKERS * 2 ))
 export ARENA_CTX="${ARENA_CTX:-32768}"
 PER_MODEL="$(python3 -c "print(round($BUDGET / ${#models[@]}, 2))")"
