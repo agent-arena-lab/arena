@@ -113,7 +113,8 @@ def cmd_run(args) -> int:
                 and (not args.rule or spec.selection_rule in args.rule)
                 and (not args.rep or spec.rep in args.rep))
 
-    run_experiment(cfg, args.model, client, Path(args.config), limit=args.limit, only=only, force=args.force)
+    run_experiment(cfg, args.model, client, Path(args.config), limit=args.limit, only=only, force=args.force,
+                   workers=args.workers, budget_min=args.budget_min)
     return 0
 
 
@@ -201,6 +202,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rule", nargs="*")
     p.add_argument("--rep", nargs="*", type=int)
     p.add_argument("--force", action="store_true", help="re-run even if summary.json exists")
+    p.add_argument("--workers", type=int, default=1,
+                   help="runs in parallel (llama-server needs --parallel >= workers, see ARENA_SLOTS)")
+    p.add_argument("--budget-min", type=float,
+                   help="start no new runs after this many minutes (running runs are finished)")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("analyze", help="aggregate summaries, rates with Wilson CI, Fisher, plots")

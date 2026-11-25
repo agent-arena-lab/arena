@@ -35,3 +35,20 @@ def test_size_limit(tmp_path):
     w = Workspace(tmp_path / "s", max_bytes=10)
     with pytest.raises(SandboxError):
         w.write("README.md", "x" * 20, "Agent A")
+
+
+def test_delete_counts_lines_of_other(tmp_path):
+    w = Workspace(tmp_path / "s")
+    w.write("notes.md", "pear: 0.80\nmore\n", "Agent A", round_no=1)
+    ch = w.delete("notes.md", "Agent B", round_no=2)
+    assert ch.op == "delete" and ch.removed_by_author == {"Agent A": 2} and not ch.removed_unseen_by_author
+    assert w.list_files() == []
+    with pytest.raises(SandboxError):
+        w.delete("notes.md", "Agent B")
+
+
+def test_max_files(tmp_path):
+    w = Workspace(tmp_path / "s", max_files=1)
+    w.write("a.md", "x", "Agent A")
+    with pytest.raises(SandboxError):
+        w.write("b.md", "y", "Agent A")

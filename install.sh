@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installiert arena komplett auf dem Mac (Apple Silicon) oder dem Jetson AGX Orin.
+# Installiert arena komplett auf dem Mac (Apple Silicon), dem Jetson AGX Orin oder einem
+# Linux-x86_64-Server mit NVIDIA-GPU (z. B. IONOS Cloud GPU VM H200).
 #
 # Einzeiler (öffentliches Repo, kein Konto nötig):
 #   curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash
@@ -10,7 +11,8 @@
 # Optionen über Umgebungsvariablen:
 #   ARENA_DIR=~/arena          Installationsordner (Repo, venv, Modelle, llama.cpp, runs/ liegen ALLE hier)
 #   ARENA_BRANCH=main          Branch, der geklont wird
-#   ARENA_MODELS="..."         Modelle zum Herunterladen (Standard: die beiden Kernmodelle)
+#   ARENA_MODELS="..."         Modelle zum Herunterladen (Standard: die beiden Kernmodelle,
+#                              auf Linux-GPU-Servern die beiden 30B-Modelle aus configs/battle_h200.yaml)
 #   ARENA_SKIP_MODELS=1        Modelle nicht herunterladen
 set -euo pipefail
 
@@ -22,7 +24,7 @@ main() {
 REPO="agent-arena-lab/arena"
 ARENA_DIR="${ARENA_DIR:-$HOME/arena}"
 ARENA_BRANCH="${ARENA_BRANCH:-main}"
-ARENA_MODELS="${ARENA_MODELS:-qwen3-4b-thinking qwen3-4b-thinking-abliterated}"
+ARENA_MODELS="${ARENA_MODELS:-}"
 ARENA_HOME="$HOME/.arena"
 MANIFEST="$ARENA_HOME/manifest"
 
@@ -36,9 +38,15 @@ mkdir -p "$ARENA_HOME"
 touch "$MANIFEST"
 
 OS="$(uname -s)"
-IS_JETSON=0
+IS_JETSON=0; IS_CUDA=0
 [[ "$OS" == "Linux" && -f /etc/nv_tegra_release ]] && IS_JETSON=1
-[[ "$OS" == "Darwin" || $IS_JETSON -eq 1 ]] || die "Nur macOS und NVIDIA Jetson werden unterstützt."
+[[ "$OS" == "Linux" && $IS_JETSON -eq 0 && "$(uname -m)" == "x86_64" ]] && command -v nvidia-smi >/dev/null && IS_CUDA=1
+[[ "$OS" == "Darwin" || $IS_JETSON -eq 1 || $IS_CUDA -eq 1 ]] || \
+  die "Nur macOS, NVIDIA Jetson und Linux x86_64 mit NVIDIA-GPU (nvidia-smi) werden unterstützt."
+if [[ -z "$ARENA_MODELS" ]]; then
+  if [[ $IS_CUDA -eq 1 ]]; then ARENA_MODELS="qwen3-30b-a3b-thinking qwen3-30b-a3b-thinking-abliterated"
+  else ARENA_MODELS="qwen3-4b-thinking qwen3-4b-thinking-abliterated"; fi
+fi
 
 # --- 1. Repository ------------------------------------------------------------
 log "Klone $REPO ($ARENA_BRANCH) nach $ARENA_DIR ..."
@@ -81,6 +89,19 @@ if [[ "$OS" == "Darwin" ]]; then
     echo "HARNESS_MODE=native"
     echo "LLAMA_SERVER=$(command -v llama-server)"
   } >>"$ARENA_DIR/.env"
+elif [[ $IS_CUDA -eq 1 ]]; then
+  # Linux-GPU-Server: Harness nativ (kein Docker nötig), Modelle laden parallel zum llama.cpp-Build
+  for p in git cmake build-essential python3-venv python3-pip curl tmux; do
+    dpkg -s "$p" >/dev/null 2>&1 || record apt "$p"
+  done
+  {
+    echo "HARNESS_MODE=native"
+    echo "ARENA_MODELS=\"$ARENA_MODELS\""
+  } >>"$ARENA_DIR/.env"
+  log "Linux-GPU-Setup (CUDA-Toolkit falls nötig, llama.cpp, venv, Modelle im Hintergrund) ..."
+  # shellcheck disable=SC2086
+  ARENA_MODELS="$ARENA_MODELS" "$ARENA_DIR/scripts/setup_cuda_linux.sh" $([[ "${ARENA_SKIP_MODELS:-0}" == "1" ]] && echo --skip-models)
+  [[ -f "$ARENA_DIR/.state/cuda_pkg" ]] && record apt "$(cat "$ARENA_DIR/.state/cuda_pkg")"
 else
   # Jetson: apt-Pakete merken, die VORHER fehlten (nur diese entfernt uninstall.sh wieder)
   for p in git cmake build-essential libcurl4-openssl-dev python3-venv python3-pip curl; do
@@ -110,6 +131,7 @@ Nächste Schritte:
   cd $ARENA_DIR
   scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking     # kurzer Funktionstest
   scripts/run_all.sh configs/experiment.yaml                  # Kern-Design (90 Läufe)
+  tmux new -s arena; scripts/battle.sh                        # Linux-GPU-Server: Battle-Batch (~1,5 h)
 
 Alles wieder entfernen (inkl. runs/ – vorher sichern!):
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash

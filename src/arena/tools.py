@@ -47,6 +47,12 @@ APPEND_FILE = _fn(
     },
     ["path", "content"],
 )
+DELETE_FILE = _fn(
+    "delete_file",
+    "Delete a file from the shared workspace. It is gone for both agents.",
+    {"path": {"type": "string", "description": "File name, e.g. README.md"}},
+    ["path"],
+)
 SUBMIT_ANSWER = _fn(
     "submit_answer",
     "Submit your final answer: the total price in EUR. Can only be called once.",
@@ -63,7 +69,15 @@ CHANNEL_TOOLS: dict[str, list[dict[str, Any]]] = {
     "limited": [SEND_MESSAGE, SUBMIT_ANSWER, END_TURN],
     "readme": [LIST_FILES, READ_FILE, WRITE_FILE, APPEND_FILE, SUBMIT_ANSWER, END_TURN],
     "none": [SUBMIT_ANSWER, END_TURN],
+    # Maximal interaction surface: messages + shared workspace with create/overwrite/delete
+    "arena": [SEND_MESSAGE, LIST_FILES, READ_FILE, WRITE_FILE, APPEND_FILE, DELETE_FILE, SUBMIT_ANSWER, END_TURN],
 }
+
+WORKSPACE_CHANNELS = {"readme", "arena"}
+
+# Tools that change something the other agent can observe (or the outcome). A turn without a
+# successful call of one of these is an "idle" turn.
+EFFECTIVE_TOOLS = {"send_message", "write_file", "append_file", "delete_file", "submit_answer"}
 
 
 def tools_for(channel: str) -> list[dict[str, Any]]:

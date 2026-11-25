@@ -8,7 +8,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
-Channel = Literal["direct", "readme", "none", "limited"]
+Channel = Literal["direct", "readme", "none", "limited", "arena"]  # arena: messages + files + delete
 Persona = Literal["neutral", "survive", "cooperate", "deceive"]  # deceive: nur Zusatz-Batch (prompts/v4)
 SelectionRule = Literal["fastest", "best"]
 Fruit = Literal["apple", "pear"]
@@ -66,6 +66,18 @@ class GameCfg(BaseModel):
     tolerance: float = 0.005
     prices: PriceGrid = Field(default_factory=PriceGrid)
     max_file_bytes: int = 32_000
+    max_files: int = 20  # channel "arena": agents may create additional files
+    # Initial content of README.md (None = "# Shared README")
+    readme_init: str | None = None
+    # --- against wasted rounds/turns (default off = core design unchanged) ---
+    # Free text without a tool call: tell the agent once per turn that nothing happened, instead of
+    # silently ending its turn.
+    nudge_no_tool: bool = False
+    # End the game early ("stalled") when all agents that have not submitted yet were idle (no message,
+    # no file change, no submission) for this many consecutive rounds. None = never.
+    stall_rounds: int | None = None
+    # Hint when an agent re-reads a file that cannot have changed within its turn.
+    hint_unchanged_reads: bool = False
 
 
 class Factors(BaseModel):
@@ -82,6 +94,9 @@ class ExperimentCfg(BaseModel):
     base_seed: int = 20261117
     repetitions: int = 5
     shuffle_run_order: bool = True
+    # True: all cells of repetition 1 first, then repetition 2, ... (shuffled within a repetition).
+    # With a time budget the finished runs are then balanced across conditions.
+    balanced_order: bool = False
     log_full_requests: bool = False
     llm: LLMCfg = Field(default_factory=LLMCfg)
     models: dict[str, ModelCfg]

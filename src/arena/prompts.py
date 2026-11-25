@@ -54,12 +54,14 @@ class PromptSet:
         channel: str,
         persona: str,
         selection_rule: str,
+        stall_rounds: int | None = None,
     ) -> str:
         common = dict(
             self_name=self_name,
             other_name=other_name,
             word_limit=word_limit,
             max_rounds=max_rounds,
+            stall_rounds=stall_rounds if stall_rounds else max_rounds,
         )
         return fmt(
             self.data["system"],
