@@ -51,6 +51,7 @@ game:
     pear: [0.40, 1.20]
     step: 0.05
   max_files: 20
+  max_file_bytes: 8000     # ~2k Tokens: Verlauf + 16k Antwort muss in 32k Kontext pro Slot passen
   # Preistafel als Ziel für Fälschungen (Zeilen werden per Blame dem Autor zugeordnet)
   readme_init: |
     # Shared README
