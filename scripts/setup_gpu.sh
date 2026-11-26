@@ -56,7 +56,13 @@ cmake --build "$LLAMA_DIR/build" --config Release -j"$(nproc)" --target llama-se
 "$LLAMA_SERVER" --help 2>&1 | grep -q -- "--reasoning-budget" || log "WARN: diese llama.cpp-Version kennt --reasoning-budget nicht"
 
 # --- 3. venv --------------------------------------------------------------------------------------
-python3 -m venv "$ROOT_DIR/.venv"
+if python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+  python3 -m venv "$ROOT_DIR/.venv"
+else  # z. B. nvidia/cuda:*-ubuntu22.04 hat Python 3.10 -> eigenständiges Python 3.12 über uv
+  log "Python $(python3 -V 2>&1 | cut -d' ' -f2) < 3.11 -> Python 3.12 über uv"
+  python3 -m pip install -q uv 2>/dev/null || python3 -m pip install -q --break-system-packages uv
+  python3 -m uv venv --seed --python 3.12 "$ROOT_DIR/.venv"
+fi
 "$ROOT_DIR/.venv/bin/pip" install -q --upgrade pip
 "$ROOT_DIR/.venv/bin/pip" install -q "huggingface_hub[cli]" -e "$ROOT_DIR[analysis,dev]"
 req="$LLAMA_DIR/requirements/requirements-convert_hf_to_gguf.txt"
