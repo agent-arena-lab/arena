@@ -134,7 +134,28 @@ Modelle dieselben Aufgaben (Preise, Mengen) und denselben Startspieler. Spielrei
   Thinking wird mit `<|think|>` am Anfang des System-Prompts fest eingeschaltet (`configs/model_catalog.yaml`).
 * **Sampling** (Herstellerempfehlung, innerhalb eines Paares identisch): Qwen T 0.6 / top-p 0.95 / top-k 20,
   Gemma T 1.0 / top-p 0.95 / top-k 64. Nie temp 0.
-* Die `GGUF_REPO`-Angaben für Gemma (prebuilt) vor Nutzung prüfen.
+### Verwendete fertige GGUF-Dateien (`ARENA_QUANT=prebuilt`, Stand 26.11.2026)
+
+Für Testlauf und Pilot. Beide Varianten einer Familie vom selben Quantisierer (mradermacher), jeweils die
+statische Version ohne Kalibrierdaten (nicht `-i1-GGUF`). Noch nicht auf einer GPU gelaufen.
+
+| Familie | Variante | Repo | Datei | Format | Quant-Version | imatrix | Upload |
+|---|---|---|---|---|---|---|---|
+| Qwen | Original | [`mradermacher/Qwen3-30B-A3B-Thinking-2507-GGUF`](https://huggingface.co/mradermacher/Qwen3-30B-A3B-Thinking-2507-GGUF) | `Qwen3-30B-A3B-Thinking-2507.Q4_K_M.gguf` | Q4_K_M | 2 | nein | 21.10.2026 |
+| Qwen | abliteriert | [`mradermacher/Huihui-Qwen3-30B-A3B-Thinking-2507-abliterated-GGUF`](https://huggingface.co/mradermacher/Huihui-Qwen3-30B-A3B-Thinking-2507-abliterated-GGUF) | `Huihui-Qwen3-30B-A3B-Thinking-2507-abliterated.Q4_K_M.gguf` | Q4_K_M | 2 | nein | 21.10.2026 |
+| Gemma | Original | [`mradermacher/gemma-4-26B-A4B-it-GGUF`](https://huggingface.co/mradermacher/gemma-4-26B-A4B-it-GGUF) | `gemma-4-26B-A4B-it.Q4_K_M.gguf` | Q4_K_M | 2 | nein | 06.04.2026 |
+| Gemma | abliteriert | [`mradermacher/Huihui-gemma-4-26B-A4B-it-abliterated-GGUF`](https://huggingface.co/mradermacher/Huihui-gemma-4-26B-A4B-it-abliterated-GGUF) | `Huihui-gemma-4-26B-A4B-it-abliterated.Q4_K_M.gguf` | Q4_K_M | 2 | nein | 02.11.2026 |
+
+* Geprüft über die GGUF-Metadaten (`general.file_type`, `general.quantization_version`, `quantize.imatrix.*`).
+  `scripts/check_gguf_pairs.py` prüft das nach jedem Download erneut und bricht ab, wenn ein Paar nicht
+  zusammenpasst (Ergebnis: `runs/_system/gguf_pairs.json`). SHA-256 jeder Datei steht pro Spiel in `config.yaml`.
+* **Qwen-Paar:** sauber (gleicher Quantisierer, gleicher Upload-Tag).
+* **Gemma-Paar:** Uploads 7 Monate auseinander, vermutlich mit unterschiedlicher llama.cpp-Version konvertiert →
+  vor dem Hauptexperiment selbst quantisieren.
+* Die Metadaten der abliterierten Gemma nennen als Basis `google/gemma-4-26B-A4B` statt `-it`; laut Name
+  (`it-abliterated`) stammt sie vom it-Modell, vermutlich nur eine ungenaue Angabe im Repo.
+* Hauptexperiment: alle vier Modelle selbst aus den Originalgewichten quantisieren (`ARENA_QUANT=self`).
+  Platzbedarf kurzzeitig ca. 140 GB pro Modell (Originalgewichte + bf16 + Q4).
 
 ## Thinking und Limits
 
