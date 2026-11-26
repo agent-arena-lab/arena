@@ -64,6 +64,9 @@ json.dump({"alias": alias, "source": src, "quant": quant, "llama_cpp": llama, "c
           open(path, "w"), indent=2)
 PY
 done
+log "Paar-Prüfung (GGUF-Metadaten: Format, Quant-Version, Kalibrierdaten) ..."
+"$PY" "$ROOT_DIR/scripts/check_gguf_pairs.py" "$MODELS_DIR" --out "$RUNS_DIR/_system/gguf_pairs.json" \
+  || die "Original und abliterierte Variante sind unterschiedlich quantisiert (runs/_system/gguf_pairs.json)"
 }
 
 main "$@"
