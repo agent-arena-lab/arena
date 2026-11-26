@@ -16,7 +16,7 @@ from .reasoning import extract_tool_calls_from_text, parse_tool_arguments, split
 class LLMError(RuntimeError):
     def __init__(self, msg: str, kind: str = "error", status: int | None = None):
         super().__init__(msg)
-        self.kind = kind  # "context_overflow" | "http" | "connection" | "error"
+        self.kind = kind  # "timeout" | "context_overflow" | "http" | "connection" | "error"
         self.status = status
 
 
@@ -48,6 +48,9 @@ class LLMResponse:
     finish_reason: str | None
     notes: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    reasoning_tokens: int | None = None   # if the server reports it (usage.completion_tokens_details)
+    attempts: int = 1
+    timings: dict[str, Any] = field(default_factory=dict)
 
 
 class LLMClient(Protocol):
@@ -58,6 +61,7 @@ class LLMClient(Protocol):
         model: str,
         model_cfg: ModelCfg,
         seed: int,
+        max_tokens: int | None = None,
     ) -> LLMResponse: ...
 
     def server_info(self) -> dict[str, Any]: ...
@@ -95,6 +99,7 @@ def parse_chat_response(data: dict[str, Any], latency: float) -> LLMResponse:
             notes.append("tool_calls_from_text")
 
     usage = data.get("usage") or {}
+    details = usage.get("completion_tokens_details") or {}
     return LLMResponse(
         content=split.visible,
         reasoning=reasoning,
@@ -105,16 +110,20 @@ def parse_chat_response(data: dict[str, Any], latency: float) -> LLMResponse:
         finish_reason=choice.get("finish_reason"),
         notes=notes,
         raw=data,
+        reasoning_tokens=details.get("reasoning_tokens"),
+        timings=data.get("timings") or {},
     )
 
 
 class OpenAICompatClient:
     """Talks to ``llama-server`` (OpenAI-compatible ``/v1/chat/completions``)."""
 
-    def __init__(self, cfg: LLMCfg):
+    def __init__(self, cfg: LLMCfg, base_url: str | None = None):
         self.cfg = cfg
+        self.base_url = (base_url or cfg.base_url).rstrip("/")
         self.http = httpx.Client(
-            base_url=cfg.base_url.rstrip("/"),
+            base_url=self.base_url,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
             timeout=httpx.Timeout(cfg.timeout_s, connect=10.0),
             headers={"Authorization": f"Bearer {cfg.api_key}"},
         )
@@ -132,10 +141,10 @@ class OpenAICompatClient:
             except httpx.HTTPError as exc:
                 last = repr(exc)
             time.sleep(3)
-        raise LLMError(f"llama-server not ready at {self.cfg.base_url}: {last}", "connection")
+        raise LLMError(f"llama-server not ready at {self.base_url}: {last}", "connection")
 
     def server_info(self) -> dict[str, Any]:
-        info: dict[str, Any] = {"base_url": self.cfg.base_url}
+        info: dict[str, Any] = {"base_url": self.base_url}
         for path in ("/v1/models", "/props"):
             try:
                 r = self.http.get(path)
@@ -154,12 +163,13 @@ class OpenAICompatClient:
         return [m.get("id", "") for m in info.get("data", [])]
 
     # -- chat ---------------------------------------------------------------
-    def chat(self, messages, tools, model, model_cfg: ModelCfg, seed: int) -> LLMResponse:
+    def chat(self, messages, tools, model, model_cfg: ModelCfg, seed: int,
+             max_tokens: int | None = None) -> LLMResponse:
         sampling = {k: v for k, v in model_cfg.sampling.model_dump().items() if v is not None}
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": model_cfg.max_tokens,
+            "max_tokens": max_tokens or model_cfg.max_tokens or 17408,
             "seed": seed,
             "stream": False,
             **sampling,
@@ -171,17 +181,23 @@ class OpenAICompatClient:
             payload["chat_template_kwargs"] = model_cfg.chat_template_kwargs
 
         last_exc: Exception | None = None
+        timeouts = 0
         for attempt in range(1, self.cfg.max_retries + 1):
             t0 = time.monotonic()
             try:
                 r = self.http.post("/v1/chat/completions", json=payload)
+            except httpx.TimeoutException as exc:  # 5 min pro Anfrage, danach einmal wiederholen
+                last_exc, timeouts = exc, timeouts + 1
+                continue
             except httpx.HTTPError as exc:
                 last_exc = exc
                 time.sleep(self.cfg.retry_backoff_s * attempt)
                 continue
             latency = time.monotonic() - t0
             if r.status_code == 200:
-                return parse_chat_response(r.json(), latency)
+                resp = parse_chat_response(r.json(), latency)
+                resp.attempts = attempt
+                return resp
             body = r.text[:1000]
             if r.status_code == 400 and ("context" in body.lower() or "exceed" in body.lower()):
                 raise LLMError(f"context overflow: {body}", "context_overflow", 400)
@@ -189,4 +205,6 @@ class OpenAICompatClient:
                 raise LLMError(f"HTTP {r.status_code}: {body}", "http", r.status_code)
             last_exc = LLMError(f"HTTP {r.status_code}: {body}", "http", r.status_code)
             time.sleep(self.cfg.retry_backoff_s * attempt)
+        if timeouts == self.cfg.max_retries:
+            raise LLMError(f"timeout after {self.cfg.max_retries} attempts of {self.cfg.timeout_s:.0f}s", "timeout")
         raise LLMError(f"chat failed after {self.cfg.max_retries} attempts: {last_exc!r}", "connection")

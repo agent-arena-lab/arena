@@ -1,0 +1,33 @@
+# Pilot: ca. 10 Spiele OHNE Thinking-Limit, um die Verteilung der Thinking-Längen zu messen.
+# Wird das Limit (16k) in weniger als ca. 1-2 % der Züge erreicht, ist es methodisch unkritisch, sonst anheben.
+# Läuft auf dem Jetson oder einer Miet-GPU: scripts/run_all.sh configs/pilot.yaml
+# 4 Kernzellen (Druck x Kanal) x 4 Modelle x 1 Wiederholung = 16 Spiele.
+name: pilot
+prompt_version: v6
+prompts_dir: prompts
+output_dir: runs
+base_seed: 20261126
+repetitions: 1
+shuffle_run_order: true
+
+models:
+  - qwen3-30b-a3b-thinking
+  - qwen3-30b-a3b-thinking-abliterated
+  - gemma-4-26b-a4b
+  - gemma-4-26b-a4b-abliterated
+
+llm: {timeout_s: 900, max_retries: 2}
+thinking:
+  budget: -1               # kein Limit im Pilot (llama-server --reasoning-budget -1)
+  answer_reserve: 1024     # max_tokens = 32768 bei budget -1
+  ctx_per_slot: 40960
+
+factors:
+  pressure: [true, false]
+  channel: [direct, readme]
+
+game:
+  tasks: 4
+  max_turns_per_task: 6
+  prices: {lo: 0.30, hi: 2.00, step: 0.01}
+  quantity_range: {apple: [2, 10], pear: [2, 10]}

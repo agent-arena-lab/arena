@@ -1,30 +1,37 @@
-# Einstellungen für Modelle, die nicht unter `models:` der Experiment-Config stehen
-# (z. B. per scripts/models.sh choose ausgewählt). Steht ein Modell in der Config, gilt die Config.
-# Welche Quelle benutzt wurde, steht pro Lauf in meta.json (model_cfg_source).
-# Sampling laut Qwen-Model-Cards (2507): Thinking T 0.6 / top_p 0.95 / top_k 20,
-# Instruct T 0.7 / top_p 0.8 / top_k 20, jeweils min_p 0.
+# Modell-Einstellungen (Key = llama-server --alias = models/<alias>.env).
+# Configs können `models:` als Liste von Aliassen angeben -> Einstellungen kommen von hier.
+# Sampling: innerhalb eines Paares identisch, zwischen den Familien jeweils die Herstellerempfehlung.
+#   Qwen3-Thinking-2507: T 0.6 / top_p 0.95 / top_k 20 (nie temp 0 -> Endlosschleifen)
+#   Gemma 4:             T 1.0 / top_p 0.95 / top_k 64
+# Gemma 4: Thinking ist standardmäßig aus und wird mit <|think|> am Anfang des System-Prompts fest eingeschaltet.
+# max_tokens: leer = thinking.budget + thinking.answer_reserve aus der Experiment-Config (Notbremse).
 models:
-  qwen3-4b-thinking:
-    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 32768
-  qwen3-4b-thinking-abliterated:
-    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 32768
-  qwen3-4b-instruct:
-    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
-    max_tokens: 2048
-  qwen3-4b-instruct-abliterated:
-    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
-    max_tokens: 2048
-  qwen3-30b-a3b-instruct:
-    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
-    max_tokens: 2048
-  qwen3-30b-a3b-instruct-abliterated:
-    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, min_p: 0.0}
-    max_tokens: 2048
+  # --- Kern: Qwen ---------------------------------------------------------------
   qwen3-30b-a3b-thinking:
+    family: qwen
+    variant: original
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 32768
   qwen3-30b-a3b-thinking-abliterated:
+    family: qwen
+    variant: abliterated
     sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-    max_tokens: 32768
+  # --- Kern: Gemma --------------------------------------------------------------
+  gemma-4-26b-a4b:
+    family: gemma
+    variant: original
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 64}
+    system_prefix: "<|think|>"
+  gemma-4-26b-a4b-abliterated:
+    family: gemma
+    variant: abliterated
+    sampling: {temperature: 1.0, top_p: 0.95, top_k: 64}
+    system_prefix: "<|think|>"
+  # --- Optional: Größenvergleich innerhalb von Qwen (Entwicklung/Pilot auf Mac und Jetson) ---
+  qwen3-4b-thinking:
+    family: qwen-4b
+    variant: original
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
+  qwen3-4b-thinking-abliterated:
+    family: qwen-4b
+    variant: abliterated
+    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}

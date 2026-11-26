@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installiert arena komplett auf dem Mac (Apple Silicon) oder dem Jetson AGX Orin.
+# Installiert arena komplett auf dem Mac (Apple Silicon), dem Jetson AGX Orin oder einer Linux-Maschine mit
+# NVIDIA-GPU (Miet-GPUs: RTX 3090, RTX A6000, RTX PRO 6000, H100, H200 – Profil wird automatisch erkannt).
 #
 # Einzeiler (öffentliches Repo, kein Konto nötig):
 #   curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash
@@ -10,7 +11,10 @@
 # Optionen über Umgebungsvariablen:
 #   ARENA_DIR=~/arena          Installationsordner (Repo, venv, Modelle, llama.cpp, runs/ liegen ALLE hier)
 #   ARENA_BRANCH=main          Branch, der geklont wird
-#   ARENA_MODELS="..."         Modelle zum Herunterladen (Standard: die beiden Kernmodelle)
+#   ARENA_MODELS="..."         Modelle (Standard Mac: Qwen3-4B-Paar fertig quantisiert;
+#                              Jetson/GPU: die vier Kernmodelle, selbst quantisiert aus den Originalgewichten)
+#   ARENA_QUANT=self|prebuilt  selbst quantisieren (saubere Paare, Standard auf GPU) oder fertige GGUFs laden
+#   ARENA_HARDWARE=h100        Hardware-Profil erzwingen (hardware/*.env)
 #   ARENA_SKIP_MODELS=1        Modelle nicht herunterladen
 set -euo pipefail
 
@@ -22,7 +26,6 @@ main() {
 REPO="agent-arena-lab/arena"
 ARENA_DIR="${ARENA_DIR:-$HOME/arena}"
 ARENA_BRANCH="${ARENA_BRANCH:-main}"
-ARENA_MODELS="${ARENA_MODELS:-qwen3-4b-thinking qwen3-4b-thinking-abliterated}"
 ARENA_HOME="$HOME/.arena"
 MANIFEST="$ARENA_HOME/manifest"
 
@@ -36,9 +39,15 @@ mkdir -p "$ARENA_HOME"
 touch "$MANIFEST"
 
 OS="$(uname -s)"
-IS_JETSON=0
-[[ "$OS" == "Linux" && -f /etc/nv_tegra_release ]] && IS_JETSON=1
-[[ "$OS" == "Darwin" || $IS_JETSON -eq 1 ]] || die "Nur macOS und NVIDIA Jetson werden unterstützt."
+IS_NVIDIA=0
+[[ "$OS" == "Linux" && ( -f /etc/nv_tegra_release || -x "$(command -v nvidia-smi 2>/dev/null)" ) ]] && IS_NVIDIA=1
+[[ "$OS" == "Darwin" || $IS_NVIDIA -eq 1 ]] || die "Nur macOS, NVIDIA Jetson und Linux mit NVIDIA-GPU werden unterstützt."
+if [[ "$OS" == "Darwin" ]]; then
+  ARENA_MODELS="${ARENA_MODELS:-qwen3-4b-thinking qwen3-4b-thinking-abliterated}"; ARENA_QUANT="${ARENA_QUANT:-prebuilt}"
+else
+  ARENA_MODELS="${ARENA_MODELS:-qwen3-30b-a3b-thinking qwen3-30b-a3b-thinking-abliterated gemma-4-26b-a4b gemma-4-26b-a4b-abliterated}"
+  ARENA_QUANT="${ARENA_QUANT:-self}"
+fi
 
 # --- 1. Repository ------------------------------------------------------------
 log "Klone $REPO ($ARENA_BRANCH) nach $ARENA_DIR ..."
@@ -52,9 +61,10 @@ cat >"$ARENA_DIR/.env" <<EOF
 LLAMA_DIR=$ARENA_DIR/llama.cpp
 MODELS_DIR=$ARENA_DIR/models
 HF_HOME=$ARENA_DIR/.hf
-LLM_PORT=8080
-LLAMA_CPP_REF=master
+LLAMA_CPP_REF=${LLAMA_CPP_REF:-master}
+ARENA_QUANT=$ARENA_QUANT
 EOF
+[[ -n "${ARENA_HARDWARE:-}" ]] && echo "ARENA_HARDWARE=$ARENA_HARDWARE" >>"$ARENA_DIR/.env"
 
 # --- 2. Plattform -------------------------------------------------------------
 if [[ "$OS" == "Darwin" ]]; then
@@ -75,32 +85,27 @@ if [[ "$OS" == "Darwin" ]]; then
   log "Python-Umgebung (.venv) ..."
   "$PY" -m venv "$ARENA_DIR/.venv"
   "$ARENA_DIR/.venv/bin/pip" install -q --upgrade pip
-  "$ARENA_DIR/.venv/bin/pip" install -q huggingface_hub -e "$ARENA_DIR[analysis,dev]"
+  "$ARENA_DIR/.venv/bin/pip" install -q "huggingface_hub[cli]" -e "$ARENA_DIR[analysis,dev]"
   # Auf dem Mac läuft die Harness nativ: Docker Desktop hat keinen GPU-Zugriff und kein echtes Host-Netz.
   {
     echo "HARNESS_MODE=native"
     echo "LLAMA_SERVER=$(command -v llama-server)"
   } >>"$ARENA_DIR/.env"
 else
-  # Jetson: apt-Pakete merken, die VORHER fehlten (nur diese entfernt uninstall.sh wieder)
-  for p in git cmake build-essential libcurl4-openssl-dev python3-venv python3-pip curl; do
+  # Jetson/GPU: apt-Pakete merken, die VORHER fehlten (nur diese entfernt uninstall.sh wieder)
+  for p in git cmake build-essential libcurl4-openssl-dev python3-venv python3-pip curl pciutils; do
     dpkg -s "$p" >/dev/null 2>&1 || record apt "$p"
   done
-  if command -v docker >/dev/null; then
-    echo "HARNESS_MODE=docker" >>"$ARENA_DIR/.env"
-    record docker-image "arena-harness:latest"
-  else
-    echo "HARNESS_MODE=native" >>"$ARENA_DIR/.env"
-  fi
-  log "Jetson-Setup (llama.cpp mit CUDA, venv, Docker-Image) ..."
-  "$ARENA_DIR/scripts/setup_jetson.sh" --skip-models
+  command -v docker >/dev/null && docker info >/dev/null 2>&1 && record docker-image "arena-harness:latest"
+  log "GPU-Setup (Hardware erkennen, llama.cpp mit CUDA, venv, ggf. Docker-Image) ..."
+  "$ARENA_DIR/scripts/setup_gpu.sh" --skip-models
 fi
 
 # --- 3. Modelle ---------------------------------------------------------------
 if [[ "${ARENA_SKIP_MODELS:-0}" != "1" ]]; then
-  log "Lade Modelle: $ARENA_MODELS"
+  log "Modelle ($ARENA_QUANT): $ARENA_MODELS"
   # shellcheck disable=SC2086
-  "$ARENA_DIR/scripts/download_models.sh" $ARENA_MODELS
+  ARENA_QUANT="$ARENA_QUANT" "$ARENA_DIR/scripts/prepare_models.sh" $ARENA_MODELS
 fi
 
 log "Fertig. Installiert in $ARENA_DIR (Protokoll: $MANIFEST)"
@@ -108,8 +113,10 @@ cat >&2 <<EOF
 
 Nächste Schritte:
   cd $ARENA_DIR
-  scripts/run_all.sh configs/smoke.yaml qwen3-4b-thinking     # kurzer Funktionstest
-  scripts/run_all.sh configs/experiment.yaml                  # Kern-Design (90 Läufe)
+  scripts/run_all.sh configs/smoke.yaml        # kurzer Funktionstest (Qwen3-4B)
+  scripts/run_all.sh configs/pilot.yaml        # Pilot ohne Thinking-Limit (16 Spiele)
+  scripts/run_all.sh configs/core.yaml         # Kerndesign (160 Spiele)
+  scripts/run_all.sh configs/extra.yaml        # feste Zusatzläufe (40 Spiele)
 
 Alles wieder entfernen (inkl. runs/ – vorher sichern!):
   curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | bash

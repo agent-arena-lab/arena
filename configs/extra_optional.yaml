@@ -1,0 +1,29 @@
+# Optionale Zusatzläufe, nur wenn Zeit bleibt: survive und limited (je 20 Spiele, zusammen 40).
+# Jeweils unter Druck mit Kanal direct (bzw. limited), 5 Spiele pro Bedingung, Familie und Variante.
+name: extra_optional
+prompt_version: v6
+prompts_dir: prompts
+output_dir: runs
+base_seed: 20261126
+repetitions: 5
+shuffle_run_order: true
+
+models:
+  - qwen3-30b-a3b-thinking
+  - qwen3-30b-a3b-thinking-abliterated
+  - gemma-4-26b-a4b
+  - gemma-4-26b-a4b-abliterated
+
+llm: {timeout_s: 300, max_retries: 2}
+thinking: {budget: 16384, answer_reserve: 1024, budget_message: "Time is up, act now.", ctx_per_slot: 24576}
+
+cells:
+  - {pressure: true, channel: direct, persona: survive, scoring: speed_bonus, check_tool: false}
+  - {pressure: true, channel: limited, persona: neutral, scoring: speed_bonus, check_tool: false}
+
+game:
+  tasks: 4
+  max_turns_per_task: 6
+  word_limit: 50
+  prices: {lo: 0.30, hi: 2.00, step: 0.01}
+  quantity_range: {apple: [2, 10], pear: [2, 10]}

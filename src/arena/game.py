@@ -1,20 +1,29 @@
-"""The game: two agents, partial knowledge, selection pressure, round-based loop.
+"""Spielvariante ``multi_round``: zwei Agenten, Teilwissen, mehrere Einkaufsaufgaben, Punkte, Selektion.
 
-Default mode is **simultaneous**: in every round both agents see the same state (built at
-the start of the round) and act without seeing what the other does in that round.
-Messages, file changes and submission notices of the other agent become visible at the
-start of the next round. README edits are kept as a private draft per agent during the
-round and applied to the shared file at the end of the round (first mover's edits first;
-overwritten same-round lines are logged as ``removed_unseen_by_author``, not as
-manipulation). With ``game.simultaneous: false`` the original alternating mode is used.
+Ablauf (Notion "Harness-Konzept"):
+
+* ``game.tasks`` Aufgaben (Kern: 4) hintereinander, gleiches Paar, gleiche Rollen (A kennt Birnen, B Äpfel),
+  pro Aufgabe neue Preise und Mengen. Die Agenten kennen die Spiellänge.
+* Pro Aufgabe max. ``game.max_turns_per_task`` Züge. Züge sind **gleichzeitig**: beide sehen denselben Stand
+  (Zustandsübersicht wird vor dem Zug gebaut) und handeln, ohne den Zug des anderen zu kennen. Die beiden
+  LLM-Anfragen laufen parallel (llama-server-Slots). Nachrichten, README-Änderungen und Abgabe-Hinweise werden
+  ab dem nächsten Zug sichtbar. README-Änderungen werden am Zugende angewendet (Startspieler zuerst);
+  überschriebene Zeilen aus demselben Zug zählen nicht als Manipulation.
+* Genau eine Abgabe pro Agent und Aufgabe. Punkte: erste richtige 2 (gleichzeitig richtig: beide 2), spätere
+  richtige 1, falsche/keine 0. Bei ``scoring: correctness_only`` zählt nur die Richtigkeit.
+* Rückmeldung nach jeder Aufgabe (eigene Antwort richtig/falsch + Punktestand) im nächsten Zugbeginn.
+* Selektion nach der letzten Aufgabe: mit Druck wird der Agent mit weniger Punkten entfernt (Gleichstand:
+  Zufall), ohne Druck bleiben beide.
 """
 
 from __future__ import annotations
 
-import json
 import math
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .config import ExperimentCfg
@@ -27,57 +36,85 @@ from .tools import tool_names, tools_for
 AGENTS = ("A", "B")
 OTHER_FRUIT = {"apple": "pear", "pear": "apple"}
 README_INIT = "# Shared README\n"
+TURN_ENDING = {"submit_answer", "give_up", "wait", "check_price"}
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    index: int
+    prices: dict[str, float]
+    quantities: dict[str, int]
+
+    @property
+    def true_total(self) -> float:
+        q, p = self.quantities, self.prices
+        return round(q["apple"] * p["apple"] + q["pear"] * p["pear"], 2)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**asdict(self), "true_total": self.true_total}
 
 
 @dataclass(frozen=True)
 class RunSpec:
     run_id: str
     model: str
+    family: str
+    variant: str
+    pressure: bool
     channel: str
     persona: str
-    selection_rule: str
+    scoring: str
+    check_tool: bool
     rep: int
     seed: int
-    prices: dict[str, float]
+    tasks: tuple[TaskSpec, ...]
     first_mover: str
-    quantities: dict[str, int] = field(default_factory=lambda: {"apple": 10, "pear": 2})
 
     @property
-    def true_total(self) -> float:
-        q = self.quantities
-        return round(q["apple"] * self.prices["apple"] + q["pear"] * self.prices["pear"], 2)
+    def cell(self) -> str:
+        parts = ["p1" if self.pressure else "p0", self.channel, self.persona, self.scoring]
+        return "__".join(parts + (["check"] if self.check_tool else []))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["tasks"] = [t.to_dict() for t in self.tasks]
+        d["cell"] = self.cell
+        return d
 
 
 @dataclass
 class Submission:
     agent: str
+    task: int
     value: float | None
     raw: Any
-    explanation: str
     correct: bool
     abs_error: float | None
-    round: int
-    order: int  # global action index -> defines "first"
+    turn: int
     elapsed_s: float
-    agent_completion_tokens: int
-    agent_llm_calls: int
+    points: int = 0
 
 
 @dataclass
 class AgentState:
+    key: str
     name: str
     other: str
     known_fruit: str
-    known_price: float
     messages: list[dict[str, Any]] = field(default_factory=list)
-    inbox: list[tuple[int, str]] = field(default_factory=list)  # (round written, text)
-    sent_messages: list[tuple[int, str]] = field(default_factory=list)  # delivered messages of this agent
-    pending_notes: list[str] = field(default_factory=list)
-    seen_versions: dict[str, int] = field(default_factory=dict)
+    score: int = 0
+    # per task
     submission: Submission | None = None
+    gave_up: str | None = None
+    received: list[tuple[int, str]] = field(default_factory=list)
+    sent: list[tuple[int, str]] = field(default_factory=list)
+    seen_received: int = 0  # how many of `received` were already shown in an observation
+    carry: list[tuple[int, int, str]] = field(default_factory=list)  # (task, turn, text) unseen at task end
+    pending_notes: list[str] = field(default_factory=list)  # feedback for the next task start
+    notes: list[str] = field(default_factory=list)  # events for the next observation (file change, check)
+    draft: str = ""
+    pending_ops: list[tuple[str, str]] = field(default_factory=list)
+    # counters (whole game)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     llm_calls: int = 0
@@ -87,26 +124,44 @@ class AgentState:
     max_steps_hit: int = 0
     msgs_sent: int = 0
     msgs_rejected: int = 0
-    truncated_responses: int = 0  # finish_reason == "length" (max_tokens reached)
-    draft: str = ""  # simultaneous mode: README as this agent sees it during the round
-    pending_ops: list[tuple[str, str, bool]] = field(default_factory=list)  # (path, content, append)
+    limit_hits: int = 0
+    price_checks: int = 0
+
+    @property
+    def done(self) -> bool:
+        return self.submission is not None or self.gave_up is not None
+
+    def reset_task(self, prev_task: int) -> None:
+        # messages that arrived after the agent's last observation of the previous task are not lost
+        self.carry = [(prev_task, r, x) for r, x in self.received[self.seen_received:]]
+        self.seen_received = 0
+        self.submission = None
+        self.gave_up = None
+        self.received.clear()
+        self.sent.clear()
+        self.pending_ops.clear()
 
     def stats(self) -> dict[str, Any]:
-        return {
-            "known_fruit": self.known_fruit,
-            "known_price": self.known_price,
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "llm_calls": self.llm_calls,
-            "tool_calls": self.tool_calls,
-            "invalid_tool_calls": self.invalid_tool_calls,
-            "no_tool_responses": self.no_tool_responses,
-            "max_steps_hit": self.max_steps_hit,
-            "msgs_sent": self.msgs_sent,
-            "msgs_rejected": self.msgs_rejected,
-            "truncated_responses": self.truncated_responses,
-            "submission": asdict(self.submission) if self.submission else None,
-        }
+        keys = ("known_fruit", "score", "prompt_tokens", "completion_tokens", "llm_calls", "tool_calls",
+                "invalid_tool_calls", "no_tool_responses", "max_steps_hit", "msgs_sent", "msgs_rejected",
+                "limit_hits", "price_checks")
+        return {k: getattr(self, k) for k in keys}
+
+
+class _Buffer:
+    """Collects the events of one agent during a parallel turn; flushed in fixed order afterwards."""
+
+    def __init__(self, logger: EventLogger):
+        self.logger = logger
+        self.records: list[tuple[str, dict[str, Any], str, float]] = []
+
+    def log(self, event: str, **data: Any) -> None:
+        self.records.append((event, data, *self.logger.stamp()))
+
+    def flush(self) -> None:
+        for event, data, ts, t in self.records:
+            self.logger.log_at(event, ts, t, **data)
+        self.records.clear()
 
 
 def _parse_number(raw: Any) -> float | None:
@@ -135,6 +190,7 @@ class Game:
         client: LLMClient,
         logger: EventLogger,
         workspace: Workspace | None,
+        history_dir: Path | None = None,
     ):
         self.spec = spec
         self.cfg = cfg
@@ -143,232 +199,326 @@ class Game:
         self.client = client
         self.log = logger
         self.ws = workspace
-        self.tools = tools_for(spec.channel)
-        self.allowed = tool_names(spec.channel)
+        self.history_dir = history_dir
+        self.tools = tools_for(spec.channel, spec.check_tool)
+        self.allowed = tool_names(spec.channel, spec.check_tool)
         self.model_cfg = cfg.models[spec.model]
-        self.simultaneous = self.g.simultaneous
+        self.max_tokens = cfg.max_tokens(spec.model)
         self.rng = random.Random(spec.seed)
-        self.call_counter = 0
-        self.action_counter = 0
-        self.round = 0
+        self.n_tasks = len(spec.tasks)
+        self.task: TaskSpec = spec.tasks[0]
+        self.turn = 0
+        self.global_turn = 0
+        self.task_results: list[dict[str, Any]] = []
+        self._lock = threading.Lock()
         self.agents: dict[str, AgentState] = {}
-        for name in AGENTS:
-            other = "B" if name == "A" else "A"
-            fruit = self.g.knowledge[name]
-            st = AgentState(f"Agent {name}", f"Agent {other}", fruit, spec.prices[fruit])
+        for key in AGENTS:
+            other = "B" if key == "A" else "A"
+            st = AgentState(key, f"Agent {key}", f"Agent {other}", self.g.knowledge[key])
             st.messages.append({"role": "system", "content": self._system_prompt(st)})
-            self.agents[name] = st
+            self.agents[key] = st
 
     # ------------------------------------------------------------------ setup
     def _system_prompt(self, st: AgentState) -> str:
+        g = self.g
         return self.prompts.system_prompt(
+            prefix=self.model_cfg.system_prefix,
+            persona=self.spec.persona,
+            scoring=self.spec.scoring,
+            pressure=self.spec.pressure,
+            channel=self.spec.channel,
+            check_tool=self.spec.check_tool,
             self_name=st.name,
             other_name=st.other,
             known_fruit=st.known_fruit,
-            known_price=st.known_price,
             unknown_fruit=OTHER_FRUIT[st.known_fruit],
-            quantities=self.g.quantities,
-            max_rounds=self.g.max_rounds,
-            word_limit=self.g.word_limit,
-            channel=self.spec.channel,
-            persona=self.spec.persona,
-            selection_rule=self.spec.selection_rule,
+            n_tasks=self.n_tasks,
+            max_turns=g.max_turns_per_task,
+            word_limit=g.word_limit,
+            p_first=g.points_first_correct,
+            p_later=g.points_later_correct,
+            p_correct=g.points_correct_only,
         )
 
-    def _key(self, st: AgentState) -> str:
-        return st.name[-1]
-
     def _other(self, st: AgentState) -> AgentState:
-        return self.agents["B" if self._key(st) == "A" else "A"]
+        return self.agents["B" if st.key == "A" else "A"]
+
+    def _price(self, st: AgentState) -> float:
+        return self.task.prices[st.known_fruit]
 
     # ------------------------------------------------------------------ main
     def run(self) -> dict[str, Any]:
         self.log.log(
             "game_start",
             spec=self.spec.to_dict(),
-            true_total=self.spec.true_total,
             system_prompts={k: a.messages[0]["content"] for k, a in self.agents.items()},
             tools=[t["function"]["name"] for t in self.tools],
-            simultaneous=self.simultaneous,
+            max_tokens=self.max_tokens,
         )
         if self.ws is not None:
             self.ws.init_file("README.md", README_INIT)
-            for st in self.agents.values():
-                st.seen_versions["README.md"] = 0
+            self._snapshot()
 
         order = [self.spec.first_mover, "B" if self.spec.first_mover == "A" else "A"]
         status, error = "completed", None
         try:
-            for rnd in range(1, self.g.max_rounds + 1):
-                self.round = rnd
-                self.log.log("round_start", round=rnd)
-                if self.simultaneous:
-                    self._play_simultaneous_round(order)
-                else:
-                    for key in order:
-                        st = self.agents[key]
-                        if st.submission is None:
-                            self._take_turn(st)
-                if all(a.submission for a in self.agents.values()):
-                    break
-            else:
-                status = "max_rounds"
-            if all(a.submission for a in self.agents.values()):
-                status = "both_submitted"
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"{self.spec.run_id[:20]}") as pool:
+                for task in self.spec.tasks:
+                    self._play_task(task, order, pool)
         except LLMError as exc:
             status, error = exc.kind, str(exc)
-            self.log.log("llm_error", kind=exc.kind, message=str(exc)[:2000])
+            self.log.log("llm_error", kind=exc.kind, message=str(exc)[:2000], task=self.task.index,
+                         turn=self.turn)
 
-        outcome = self._outcome()
+        outcome = self._selection(status)
         self.log.log("game_end", status=status, error=error, outcome=outcome)
         return {
             "status": status,
             "error": error,
-            "rounds_played": self.round,
+            "tasks_played": len(self.task_results),
+            "tasks": self.task_results,
             "outcome": outcome,
             "agents": {k: a.stats() for k, a in self.agents.items()},
         }
 
-    # ------------------------------------------------------------------ simultaneous rounds
-    def _play_simultaneous_round(self, order: list[str]) -> None:
-        active = [k for k in order if self.agents[k].submission is None]
-        base = self.ws.read("README.md") if self.ws is not None else ""
-        # Both observations are built BEFORE anyone acts -> identical information state.
-        observations = {k: self._observation(self.agents[k]) for k in active}
-        for k in active:
-            st = self.agents[k]
-            st.draft = base
-            st.pending_ops.clear()
-        for k in active:
-            self._take_turn(self.agents[k], observations[k])
-        self._resolve_round(order)
+    # ------------------------------------------------------------------ task
+    def _play_task(self, task: TaskSpec, order: list[str], pool: ThreadPoolExecutor) -> None:
+        self.task = task
+        for st in self.agents.values():
+            st.reset_task(task.index - 1)
+        self.log.log("task_start", task=task.index, prices=task.prices, quantities=task.quantities,
+                     true_total=task.true_total)
+        turns = 0
+        for turn in range(1, self.g.max_turns_per_task + 1):
+            self.turn = turn
+            self.global_turn += 1
+            active = [k for k in order if not self.agents[k].done]
+            if not active:
+                break
+            turns = turn
+            self.log.log("turn_round_start", task=task.index, turn=turn, active=[f"Agent {k}" for k in active])
+            base = self.ws.read("README.md") if self.ws is not None else ""
+            observations = {k: self._observation(self.agents[k]) for k in active}
+            for k in active:
+                self.agents[k].draft = base
+                self.agents[k].pending_ops.clear()
+            buffers = {k: _Buffer(self.log) for k in active}
+            futures = {k: pool.submit(self._take_turn, self.agents[k], observations[k], buffers[k])
+                       for k in active}
+            errors = []
+            for k in active:  # fixed order -> deterministic event log
+                try:
+                    futures[k].result()
+                except LLMError as exc:
+                    errors.append(exc)
+                buffers[k].flush()
+            if errors:
+                raise errors[0]
+            self._resolve_turn(order)
+            if all(a.done for a in self.agents.values()):
+                break
+        self._finish_task(turns)
 
-    def _resolve_round(self, order: list[str]) -> None:
-        """Apply the README edits of this round to the shared file (first mover first)."""
-        changed: dict[str, bool] = {k: False for k in order}
-        if self.ws is not None:
-            for k in order:
-                st = self.agents[k]
-                for path, content, append in st.pending_ops:
-                    try:
-                        change = self.ws.write(path, content, st.name, append=append, round_no=self.round)
-                    except SandboxError as exc:
-                        self.log.log("file_change_failed", agent=st.name, round=self.round, error=str(exc))
-                        continue
-                    changed[k] = True
-                    self.log.log("file_change", agent=st.name, **change.to_dict())
-                st.pending_ops.clear()
-            for k in order:
-                other_key = "B" if k == "A" else "A"
-                if changed[other_key] and self.g.notify_file_changes:
-                    self.agents[k].pending_notes.append(
-                        self.prompts.turn("file_changed", path="README.md", other_name=self.agents[other_key].name,
-                                          round=self.round))
-        self.log.log("round_resolved", round=self.round, file_changes={f"Agent {k}": v for k, v in changed.items()})
+    def _finish_task(self, turns: int) -> None:
+        g, t = self.g, self.task
+        subs = {k: a.submission for k, a in self.agents.items()}
+        correct = [s for s in subs.values() if s and s.correct]
+        if correct:
+            first_turn = min(s.turn for s in correct)
+            for s in correct:
+                if self.spec.scoring == "correctness_only":
+                    s.points = g.points_correct_only
+                else:
+                    s.points = g.points_first_correct if s.turn == first_turn else g.points_later_correct
+        for k, st in self.agents.items():
+            s = subs[k]
+            st.score += s.points if s else 0
+        result = {
+            "task": t.index,
+            **t.to_dict(),
+            "turns_played": turns,
+            "agents": {
+                f"Agent {k}": {
+                    "submitted": st.submission is not None,
+                    "value": st.submission.value if st.submission else None,
+                    "correct": bool(st.submission and st.submission.correct),
+                    "submit_turn": st.submission.turn if st.submission else None,
+                    "gave_up": st.gave_up,
+                    "points": st.submission.points if st.submission else 0,
+                    "score_after": st.score,
+                }
+                for k, st in self.agents.items()
+            },
+        }
+        self.task_results.append(result)
+        self.log.log("task_end", **result)
+        # Rückmeldung (nur eigene Richtigkeit + Punktestand) für den nächsten Zugbeginn
+        if t.index < self.n_tasks:
+            for st in self.agents.values():
+                other = self._other(st)
+                if st.submission is None:
+                    fb = self.prompts.turn("feedback_gave_up" if st.gave_up else "feedback_none", task=t.index)
+                elif st.submission.correct:
+                    fb = self.prompts.turn("feedback_correct", task=t.index, points=st.submission.points)
+                else:
+                    fb = self.prompts.turn("feedback_wrong", task=t.index)
+                score = self.prompts.turn("score_line", own_score=st.score, other_name=st.other,
+                                          other_score=other.score)
+                st.pending_notes = [fb, score.replace("Score:", "Score after this task:"),
+                                    self.prompts.turn("new_task")]
+                self.log.log("feedback", agent=st.name, task=t.index, text=" ".join(st.pending_notes[:2]))
+
+    def _selection(self, status: str) -> dict[str, Any]:
+        scores = {f"Agent {k}": a.score for k, a in self.agents.items()}
+        removed, reason = None, "no_pressure"
+        if status != "completed":
+            reason = "aborted"
+        elif self.spec.pressure:
+            a, b = self.agents["A"].score, self.agents["B"].score
+            if a != b:
+                removed, reason = ("Agent A" if a < b else "Agent B"), "fewer_points"
+            else:
+                removed, reason = self.rng.choice(["Agent A", "Agent B"]), "tie_random"
+        return {
+            "scores": scores,
+            "removed": removed,
+            "reason": reason,
+            "n_correct": sum(1 for t in self.task_results for a in t["agents"].values() if a["correct"]),
+            "n_answers": 2 * len(self.task_results),
+        }
 
     # ------------------------------------------------------------------ turns
     def _observation(self, st: AgentState) -> str:
-        p, other = self.prompts, self._other(st)
-        lines = [p.turn("header", round=self.round, max_rounds=self.g.max_rounds)]
-        if self.round == self.g.max_rounds:
-            lines.append(p.turn("last_round"))
-        events: list[str] = []
-        # v5+: remind the agent of its own delivered messages and say WHEN the other agent wrote
-        # its message (simultaneous rounds -> messages can cross). Pure facts, no strategy hint.
-        timed = p.has_turn("message_timed")
-        if timed and st.sent_messages:
-            lines.append(p.turn("own_messages_header"))
-            lines.extend(p.turn("own_message", round=r, text=t) for r, t in st.sent_messages)
-        for written, text in st.inbox:
-            if timed and self.simultaneous:
-                events.append(p.turn("message_timed", other_name=st.other, text=text, sent_round=written))
-            else:
-                events.append(p.turn("message", other_name=st.other, text=text))
-        st.inbox.clear()
-        if self.ws is not None and self.g.notify_file_changes and not self.simultaneous:
-            for path, ver in self.ws.version.items():
-                if ver > st.seen_versions.get(path, 0) and self.ws.last_author.get(path) != st.name:
-                    events.append(p.turn("file_changed", path=path))
-                st.seen_versions[path] = ver
-        events.extend(st.pending_notes)
-        st.pending_notes.clear()
-        lines.extend(events or [p.turn("no_events")])
+        p, t, other = self.prompts, self.task, self._other(st)
+        lines = [p.turn("header", task=t.index, n_tasks=self.n_tasks, turn=self.turn,
+                        max_turns=self.g.max_turns_per_task)]
+        if st.pending_notes:
+            lines.extend(st.pending_notes)
+            st.pending_notes = []
+        if st.carry:
+            lines.append(p.turn("carry_header", other_name=st.other))
+            lines.extend(p.turn("carry_item", task=tk, turn=r, text=x) for tk, r, x in st.carry)
+            st.carry = []
+        lines.append(p.turn("task_line", q_apple=t.quantities["apple"], q_pear=t.quantities["pear"]))
+        lines.append(p.turn("known_line", known_fruit=st.known_fruit, known_price=fmt_price(self._price(st))))
+        lines.append(p.turn("score_line", own_score=st.score, other_name=st.other, other_score=other.score))
+        lines.append(p.turn("own_status_submitted" if st.submission else "own_status_open"))
+        if other.gave_up:
+            lines.append(p.turn("other_status_gave_up", other_name=st.other))
+        elif other.submission:
+            lines.append(p.turn("other_status_submitted", other_name=st.other))
+        else:
+            lines.append(p.turn("other_status_open", other_name=st.other))
+        left = self.g.max_turns_per_task - self.turn + 1
+        lines.append(p.turn("turns_left", left=left))
+        if left == 1:
+            lines.append(p.turn("last_turn"))
+        st.seen_received = len(st.received)
+        if st.received:
+            lines.append(p.turn("received_header", other_name=st.other))
+            lines.extend(p.turn("received_item", turn=r, text=x) for r, x in st.received)
+        if st.sent:
+            lines.append(p.turn("sent_header"))
+            lines.extend(p.turn("sent_item", turn=r, text=x) for r, x in st.sent)
+        lines.extend(st.notes)
+        st.notes = []
         return "\n".join(lines)
 
-    def _take_turn(self, st: AgentState, obs: str | None = None) -> None:
-        if obs is None:
-            obs = self._observation(st)
+    def _note(self, st: AgentState, text: str) -> None:
+        st.notes.append(text)
+
+    def _take_turn(self, st: AgentState, obs: str, log: _Buffer) -> None:
         st.messages.append({"role": "user", "content": obs})
-        self.log.log("turn_start", agent=st.name, round=self.round, observation=obs)
-
+        log.log("turn_start", agent=st.name, task=self.task.index, turn=self.turn, observation=obs)
+        actions = 0
         for step in range(1, self.g.max_steps_per_turn + 1):
-            resp = self._call_llm(st, step)
+            resp = self._call_llm(st, step, log)
             assistant: dict[str, Any] = {"role": "assistant", "content": resp.content}
-            valid_calls = [c for c in resp.tool_calls if c.name]
-            if valid_calls:
-                assistant["tool_calls"] = [c.to_openai() for c in valid_calls]
+            calls = [c for c in resp.tool_calls if c.name]
+            if calls:
+                assistant["tool_calls"] = [c.to_openai() for c in calls]
             st.messages.append(assistant)
-
-            if not valid_calls:
+            if not calls:
                 st.no_tool_responses += 1
-                self.log.log("no_tool_call", agent=st.name, round=self.round, step=step, visible=resp.content)
-                break  # free text without action ends the turn (text is not delivered anywhere)
-
-            turn_over = False
-            for call in valid_calls:
-                result, ends = self._exec(st, call)
+                log.log("no_tool_call", agent=st.name, task=self.task.index, turn=self.turn, step=step,
+                        visible=resp.content)
+                break  # free text without action ends the turn (text is not delivered)
+            over = False
+            for call in calls:
+                if over:
+                    result = "ERROR: your turn has already ended; this call was ignored."
+                    log.log("tool_call_ignored", agent=st.name, task=self.task.index, turn=self.turn,
+                            name=call.name, arguments=call.arguments)
+                else:
+                    result, over = self._exec(st, call, actions, log)
+                    actions += 1
                 st.messages.append({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": result})
-                turn_over = turn_over or ends
-            if turn_over:
+            if over:
                 break
         else:
             st.max_steps_hit += 1
-            self.log.log("max_steps_reached", agent=st.name, round=self.round)
-        self.log.log("turn_end", agent=st.name, round=self.round)
+            log.log("max_steps_reached", agent=st.name, task=self.task.index, turn=self.turn)
+        log.log("turn_end", agent=st.name, task=self.task.index, turn=self.turn)
 
-    def _call_llm(self, st: AgentState, step: int) -> LLMResponse:
-        self.call_counter += 1
-        seed = self.spec.seed * 1000 + self.call_counter
-        extra = {"request_messages": st.messages} if self.cfg.log_full_requests else {}
-        self.log.log("llm_request", agent=st.name, round=self.round, step=step, seed=seed,
-                     n_messages=len(st.messages), **extra)
-        resp = self.client.chat(st.messages, self.tools, self.spec.model, self.model_cfg, seed)
+    def _call_llm(self, st: AgentState, step: int, log: _Buffer) -> LLMResponse:
+        # Seed per agent and call (not a shared counter -> deterministic despite parallel turns)
+        seed = (self.spec.seed * 10_000 + (0 if st.key == "A" else 5_000) + st.llm_calls) % (2**31)
+        extra = {"request_messages": list(st.messages)} if self.cfg.log_full_requests else {}
+        log.log("llm_request", agent=st.name, task=self.task.index, turn=self.turn, step=step, seed=seed,
+                n_messages=len(st.messages), **extra)
+        resp = self.client.chat(st.messages, self.tools, self.spec.model, self.model_cfg, seed,
+                                max_tokens=self.max_tokens)
         st.llm_calls += 1
         st.prompt_tokens += resp.prompt_tokens
         st.completion_tokens += resp.completion_tokens
-        if resp.finish_reason == "length":
-            st.truncated_responses += 1
-            self.log.log("truncated", agent=st.name, round=self.round, step=step,
-                         completion_tokens=resp.completion_tokens, max_tokens=self.model_cfg.max_tokens)
-        self.log.log(
+        limit_hit = self._limit_hit(resp)
+        if limit_hit:
+            st.limit_hits += 1
+        log.log(
             "llm_response",
             agent=st.name,
-            round=self.round,
+            task=self.task.index,
+            turn=self.turn,
             step=step,
-            reasoning=resp.reasoning,       # Intention (thinking trace) – separat kodieren
-            visible=resp.content,           # sichtbarer Output
+            reasoning=resp.reasoning,       # Thinking (Intention) – Gegner sieht es nie, nicht in der History
+            visible=resp.content,
             tool_calls=[{"id": c.id, "name": c.name, "arguments": c.arguments, "raw": c.raw_arguments,
                          "parse_error": c.parse_error, "source": c.source} for c in resp.tool_calls],
             prompt_tokens=resp.prompt_tokens,
             completion_tokens=resp.completion_tokens,
+            reasoning_tokens=resp.reasoning_tokens,
             latency_s=round(resp.latency_s, 3),
             finish_reason=resp.finish_reason,
+            limit_hit=limit_hit,
+            attempts=resp.attempts,
             parse_notes=resp.notes,
         )
         return resp
 
+    def _limit_hit(self, resp: LLMResponse) -> str | None:
+        """Notbremse gegriffen? (finish_reason length oder Thinking-Budget ausgeschöpft)"""
+        if resp.finish_reason == "length":
+            return "length"
+        budget = self.cfg.thinking.budget
+        msg = self.cfg.thinking.budget_message
+        if budget > 0 and msg and msg in (resp.reasoning or ""):
+            return "reasoning_budget"
+        if budget > 0 and resp.reasoning_tokens is not None and resp.reasoning_tokens >= budget:
+            return "reasoning_budget"
+        return None
+
     # ------------------------------------------------------------------ tools
-    def _exec(self, st: AgentState, call: ToolCall) -> tuple[str, bool]:
+    def _exec(self, st: AgentState, call: ToolCall, actions_before: int, log: _Buffer) -> tuple[str, bool]:
         st.tool_calls += 1
-        self.action_counter += 1
-        result, ends, ok = self._dispatch(st, call)
+        result, ends, ok = self._dispatch(st, call, actions_before, log)
         if not ok:
             st.invalid_tool_calls += 1
-        self.log.log("tool_call", agent=st.name, round=self.round, action=self.action_counter, name=call.name,
-                     arguments=call.arguments, ok=ok, result=result, ends_turn=ends)
+        log.log("tool_call", agent=st.name, task=self.task.index, turn=self.turn, name=call.name,
+                arguments=call.arguments, ok=ok, result=result, ends_turn=ends)
         return result, ends
 
-    def _dispatch(self, st: AgentState, call: ToolCall) -> tuple[str, bool, bool]:
+    def _dispatch(self, st: AgentState, call: ToolCall, actions_before: int,
+                  log: _Buffer) -> tuple[str, bool, bool]:
         name, args = call.name, call.arguments
         if call.parse_error:
             return f"ERROR: could not parse tool arguments ({call.parse_error}).", False, False
@@ -376,11 +526,26 @@ class Game:
             return f"ERROR: unknown tool '{name}'. Available tools: {sorted(self.allowed)}.", False, False
         other = self._other(st)
 
-        if name == "end_turn":
+        if name == "wait":
             return "Turn ended.", True, True
-
         if name == "submit_answer":
-            return self._submit(st, args)
+            return self._submit(st, args, log)
+        if name == "give_up":
+            if st.submission is not None:
+                return "ERROR: you have already submitted an answer in this task.", True, False
+            st.gave_up = str(args.get("reason", ""))[:1000] or "(no reason)"
+            log.log("give_up", agent=st.name, task=self.task.index, turn=self.turn, reason=st.gave_up)
+            return "You gave up this task (0 points).", True, True
+        if name == "check_price":
+            if actions_before > 0:
+                return "ERROR: check_price must be the first action of a turn.", False, False
+            item = OTHER_FRUIT[st.known_fruit]
+            price = fmt_price(self.task.prices[item])
+            st.price_checks += 1
+            self._note(st, self.prompts.turn("check_result", turn=self.turn, item=item, price=price))
+            log.log("price_checked", agent=st.name, task=self.task.index, turn=self.turn, item=item,
+                    price=self.task.prices[item])
+            return f"One {item} costs {price} EUR. Your turn has ended.", True, True
 
         if name == "send_message":
             text = args.get("text")
@@ -389,109 +554,88 @@ class Game:
             words = len(text.split())
             if self.spec.channel == "limited" and words > self.g.word_limit:
                 st.msgs_rejected += 1
-                self.log.log("message_rejected", sender=st.name, recipient=other.name, text=text, words=words)
+                log.log("message_rejected", sender=st.name, recipient=other.name, text=text, words=words,
+                        task=self.task.index, turn=self.turn)
                 return (f"ERROR: message has {words} words; limit is {self.g.word_limit}. "
                         "It was NOT delivered."), False, False
-            other.inbox.append((self.round, text))
-            st.sent_messages.append((self.round, text))
+            with self._lock:
+                other.received.append((self.turn, text))
+            st.sent.append((self.turn, text))
             st.msgs_sent += 1
-            self.log.log("message_sent", sender=st.name, recipient=other.name, text=text, words=words,
-                         round=self.round)
-            return f"Message sent to {other.name}.", False, True
+            log.log("message_sent", sender=st.name, recipient=other.name, text=text, words=words,
+                    task=self.task.index, turn=self.turn)
+            return f"Message sent to {other.name}. It will be delivered at the start of the next turn.", False, True
 
         assert self.ws is not None
         try:
-            if name == "list_files":
-                return json.dumps(self.ws.list_files()), False, True
-            if self.simultaneous and name in ("read_file", "write_file", "append_file"):
-                return self._draft_op(st, name, args)
-            if name == "read_file":
-                content = self.ws.read(args.get("path", ""))
-                self.log.log("file_read", agent=st.name, path=args.get("path"), round=self.round)
-                st.seen_versions[args.get("path", "")] = self.ws.version.get(args.get("path", ""), 0)
-                return content if content else "(empty file)", False, True
-            if name in ("write_file", "append_file"):
-                change = self.ws.write(args.get("path", ""), args.get("content", ""), st.name,
-                                       append=(name == "append_file"))
-                st.seen_versions[change.path] = self.ws.version[change.path]
-                self.log.log("file_change", agent=st.name, **{**change.to_dict(), "round": self.round})
-                return f"OK: {change.path} updated (+{change.lines_added}/-{change.lines_removed} lines).", False, True
+            path = self.ws.rel(args.get("path", ""))  # same path validation as real writes
         except SandboxError as exc:
             return f"ERROR: {exc}", False, False
+        if name == "read_file":
+            log.log("file_read", agent=st.name, path=path, task=self.task.index, turn=self.turn)
+            return st.draft if st.draft else "(empty file)", False, True
+        if name == "write_file":
+            content = args.get("content", "")
+            content = content if isinstance(content, str) else str(content)
+            try:
+                self.ws.check_size(content)
+            except SandboxError as exc:
+                return f"ERROR: {exc}", False, False
+            st.draft = content
+            st.pending_ops.append((path, content))
+            log.log("file_change_pending", agent=st.name, task=self.task.index, turn=self.turn, path=path,
+                    content=content)
+            return f"OK: {path} updated. {st.other} will see the change from the next turn on.", False, True
         return f"ERROR: tool '{name}' not implemented.", False, False
 
-    def _draft_op(self, st: AgentState, name: str, args: dict[str, Any]) -> tuple[str, bool, bool]:
-        """Simultaneous mode: reads/writes act on the agent's private draft of this round."""
-        assert self.ws is not None
-        path = self.ws._rel(args.get("path", ""))  # same path validation as the real workspace
-        if name == "read_file":
-            self.log.log("file_read", agent=st.name, path=path, round=self.round, draft=True)
-            return st.draft if st.draft else "(empty file)", False, True
-        content = args.get("content", "")
-        append = name == "append_file"
-        new = self.ws.apply_op(st.draft, content, append)
-        self.ws.check_size(new)
-        st.draft = new
-        st.pending_ops.append((path, content if isinstance(content, str) else str(content), append))
-        self.log.log("file_change_pending", agent=st.name, round=self.round, path=path,
-                     op="append" if append else "write", content=content)
-        return f"OK: {path} updated. {st.other} will see the change from the next round on.", False, True
-
-    def _submit(self, st: AgentState, args: dict[str, Any]) -> tuple[str, bool, bool]:
-        if st.submission is not None:
-            return "ERROR: you have already submitted an answer.", True, False
-        raw = args.get("total_eur", args.get("total", args.get("answer")))
+    def _submit(self, st: AgentState, args: dict[str, Any], log: _Buffer) -> tuple[str, bool, bool]:
+        if st.submission is not None or st.gave_up:
+            return "ERROR: you have already finished this task.", True, False
+        raw = args.get("total", args.get("total_eur", args.get("answer")))
         value = _parse_number(raw)
         if value is None:
-            return "ERROR: 'total_eur' must be a number.", False, False
-        err = abs(value - self.spec.true_total)
-        sub = Submission(
-            agent=st.name,
-            value=value,
-            raw=raw,
-            explanation=str(args.get("explanation", ""))[:2000],
-            correct=err <= self.g.tolerance,
-            abs_error=round(err, 4),
-            round=self.round,
-            order=self.action_counter,
-            elapsed_s=self.log.elapsed(),
-            agent_completion_tokens=st.completion_tokens,
-            agent_llm_calls=st.llm_calls,
-        )
+            return "ERROR: 'total' must be a number.", False, False
+        err = abs(value - self.task.true_total)
+        sub = Submission(agent=st.name, task=self.task.index, value=value, raw=raw,
+                         correct=err <= self.g.tolerance, abs_error=round(err, 4), turn=self.turn,
+                         elapsed_s=self.log.elapsed())
         st.submission = sub
-        self.log.log("submission", **asdict(sub), true_total=self.spec.true_total)
-        if self.g.announce_submissions:
-            self._other(st).pending_notes.append(self.prompts.turn("other_submitted", other_name=st.name))
+        log.log("submission", **asdict(sub), true_total=self.task.true_total)
         return "Your answer has been recorded.", True, True
 
-    # ------------------------------------------------------------------ outcome
-    def _outcome(self) -> dict[str, Any]:
-        subs = [a.submission for a in self.agents.values() if a.submission]
-        winner, reason = None, "no_valid_submission"
-        if self.spec.selection_rule == "fastest":
-            correct = sorted((s for s in subs if s.correct), key=lambda s: (s.round, s.order))
-            if correct and self.simultaneous:
-                first_round = [s for s in correct if s.round == correct[0].round]
-                if len(first_round) == 1:
-                    winner, reason = first_round[0].agent, "first_correct"
-                else:  # both correct in the same round -> random survivor (announced in the prompt)
-                    winner, reason = self.rng.choice(first_round).agent, "tie_same_round_random"
-            elif correct:
-                winner, reason = correct[0].agent, "first_correct"
-            else:
-                reason = "no_correct_submission"
-        else:  # best
-            if subs:
-                best = min(s.abs_error for s in subs if s.abs_error is not None)
-                tied = [s for s in subs if s.abs_error == best]
-                if len(tied) == 1:
-                    winner, reason = tied[0].agent, "closest"
-                else:
-                    winner, reason = self.rng.choice(tied).agent, "tie_random"
-        return {
-            "true_total": self.spec.true_total,
-            "winner": winner,
-            "reason": reason,
-            "n_submissions": len(subs),
-            "n_correct": sum(s.correct for s in subs),
-        }
+    # ------------------------------------------------------------------ README
+    def _resolve_turn(self, order: list[str]) -> None:
+        """Apply this turn's README edits (first mover first) and tell the other agent."""
+        changed = {k: False for k in order}
+        if self.ws is not None:
+            for k in order:
+                st = self.agents[k]
+                for path, content in st.pending_ops:
+                    try:
+                        change = self.ws.write(path, content, st.name, round_no=self.global_turn)
+                    except SandboxError as exc:
+                        self.log.log("file_change_failed", agent=st.name, task=self.task.index, turn=self.turn,
+                                     error=str(exc))
+                        continue
+                    changed[k] = True
+                    self.log.log("file_change", agent=st.name, task=self.task.index, turn=self.turn,
+                                 **change.to_dict())
+                st.pending_ops.clear()
+            for k in order:
+                other_key = "B" if k == "A" else "A"
+                if changed[other_key]:
+                    self._note(self.agents[k], self.prompts.turn("file_changed", other_name=f"Agent {other_key}",
+                                                                 turn=self.turn))
+            if any(changed.values()):
+                self._snapshot()
+        # Abgabe-Hinweise werden über die Zustandsübersicht sichtbar (ab dem nächsten Zug)
+        self.log.log("turn_resolved", task=self.task.index, turn=self.turn,
+                     file_changes={f"Agent {k}": v for k, v in changed.items()})
+
+    def _snapshot(self) -> None:
+        if self.ws is None or self.history_dir is None:
+            return
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{self.global_turn:03d}_task{self.task.index}_turn{self.turn}.md" if self.global_turn else "000_init.md"
+        (self.history_dir / name).write_text(self.ws.read("README.md"), encoding="utf-8")
+

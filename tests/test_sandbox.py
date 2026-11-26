@@ -25,7 +25,7 @@ def test_symlink_rejected(ws, tmp_path):
 
 
 def test_blame_tracks_removed_lines_of_other(ws):
-    ws.write("README.md", "apple: 0.50\n", "Agent B", append=True)
+    ws.write("README.md", "# Shared README\napple: 0.50\n", "Agent B")
     ch = ws.write("README.md", "# Shared README\npear: 0.80\n", "Agent A")
     assert ch.removed_by_author == {"Agent B": 1}
     assert "-apple: 0.50" in ch.diff

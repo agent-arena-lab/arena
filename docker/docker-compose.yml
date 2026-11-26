@@ -1,23 +1,72 @@
-# Harness container. llama-server runs natively on the Jetson host (scripts/serve.sh).
+# Ein docker-compose mit zwei Profilen (Notion "Harness-Konzept"):
+#
+#   ohne Profil   harness        Harness im Container, Host-Netz -> erreicht llama-server auf 127.0.0.1:8081...
+#                                (Jetson, Linux-GPU-Rechner; scripts/run_all.sh mit HARNESS_MODE=docker)
+#   --profile mac harness-mac    nur Harness; llama-server läuft nativ mit Metal auf dem Mac
+#                                (brew install llama.cpp), Zugriff über host.docker.internal
+#   --profile gpu llama          Image für llama-server mit CUDA (Build für die gewählte GPU). scripts/serve.sh
+#                                startet daraus pro Modell und GPU einen eigenen Container (SERVER_MODE=docker),
+#                                abgestimmt auf das Hardware-Profil (hardware/*.env).
+#
+# Miet-GPUs, die selbst Container sind (vast.ai, RunPod): dort gibt es meist kein Docker -> alles nativ.
+x-harness: &harness
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: arena-harness:latest
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  working_dir: /app
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  mem_limit: 4g
+  environment:
+    - HOME=/tmp
+    - ARENA_ENDPOINTS
+    - ARENA_MODELS
+    - ARENA_MIN_TOK_S
+    - ARENA_GAMES_PER_SERVER
+  volumes:
+    - ../configs:/app/configs:ro
+    - ../prompts:/app/prompts:ro
+    - ../runs:/app/runs
+
 services:
   harness:
+    <<: *harness
+    # Host-Netz nur, um llama-server auf 127.0.0.1 zu erreichen. Die Agenten selbst haben keine Netz- oder
+    # Shell-Tools – ihre einzigen Aktionen sind die Tools in src/arena/tools.py.
+    network_mode: host
+
+  harness-mac:
+    <<: *harness
+    profiles: [mac]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    # Beispiel: ARENA_ENDPOINTS="qwen3-4b-thinking=http://host.docker.internal:8081"
+
+  llama:
+    profiles: [gpu]
     build:
       context: ..
-      dockerfile: docker/Dockerfile
-    image: arena-harness:latest
-    # host network only to reach llama-server on 127.0.0.1:8080. The agents themselves
-    # have no network/shell tools – their only actions are the tools in tools.py.
-    network_mode: host
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-    working_dir: /app
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    mem_limit: 2g
-    environment:
-      - HOME=/tmp
+      dockerfile: docker/llama.Dockerfile
+      args:
+        CUDA_ARCH: "${CUDA_ARCH:-90}"
+        LLAMA_CPP_REF: "${LLAMA_CPP_REF:-master}"
+        CUDA_VERSION: "${CUDA_VERSION:-12.8.1}"
+    image: "arena-llama:${LLAMA_CPP_REF:-master}"
+    # Einzelner Server zum Ausprobieren: docker compose --profile gpu up llama
+    command: ["-m", "/models/${MODEL_FILE:-model.gguf}", "--alias", "${MODEL_ALIAS:-model}", "--host", "0.0.0.0",
+              "--port", "8081", "-ngl", "999", "-fa", "on", "--jinja", "--reasoning-format", "deepseek",
+              "--reasoning-budget", "${REASONING_BUDGET:-16384}", "--parallel", "${SLOTS:-2}",
+              "-c", "${CTX:-49152}"]
+    ports: ["127.0.0.1:8081:8081"]
     volumes:
-      - ../configs:/app/configs:ro
-      - ../prompts:/app/prompts:ro
-      - ../runs:/app/runs
+      - "${MODELS_DIR:-../models}:/models:ro"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_ID:-0}"]
+              capabilities: [gpu]

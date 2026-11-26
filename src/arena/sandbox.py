@@ -27,14 +27,14 @@ def _sha(text: str) -> str:
 class FileChange:
     path: str
     author: str
-    op: str  # write | append | create
+    op: str  # write | create
     before_sha: str
     after_sha: str
     diff: str
     lines_added: int
     lines_removed: int
     removed_by_author: dict[str, int] = field(default_factory=dict)
-    # Simultaneous rounds: lines of another author that were written in the SAME round and
+    # Simultaneous turns: lines of another author that were written in the SAME turn and
     # therefore were not visible to this author when it decided (not counted as manipulation).
     removed_unseen_by_author: dict[str, int] = field(default_factory=dict)
     round: int | None = None
@@ -55,7 +55,7 @@ class Workspace:
         self.last_author: dict[str, str] = {}
 
     # -- path handling ------------------------------------------------------
-    def _rel(self, path: str) -> str:
+    def rel(self, path: str) -> str:
         if not isinstance(path, str) or not path.strip():
             raise SandboxError("path must be a non-empty string")
         raw = path.strip()
@@ -80,7 +80,7 @@ class Workspace:
 
     # -- operations ---------------------------------------------------------
     def init_file(self, name: str, content: str, author: str = "system") -> None:
-        name = self._rel(name)
+        name = self.rel(name)
         self._abs(name).write_text(content, encoding="utf-8")
         self.blame[name] = [author] * len(content.splitlines())
         self.blame_round[name] = [0] * len(content.splitlines())
@@ -91,33 +91,23 @@ class Workspace:
         return sorted(p.name for p in self.root.iterdir() if p.is_file() and not p.is_symlink())
 
     def read(self, path: str) -> str:
-        name = self._rel(path)
+        name = self.rel(path)
         full = self._abs(name)
         if not full.exists():
             raise SandboxError(f"file '{name}' does not exist")
         return full.read_text(encoding="utf-8")
 
-    @staticmethod
-    def apply_op(before: str, content: str, append: bool) -> str:
-        """Result of a write/append on `before` (shared by real writes and simultaneous drafts)."""
-        if not isinstance(content, str):
-            content = str(content)
-        if append:
-            sep = "" if (not before or before.endswith("\n")) else "\n"
-            return before + sep + content
-        return content
-
     def check_size(self, text: str) -> None:
         if len(text.encode("utf-8")) > self.max_bytes:
             raise SandboxError(f"file would exceed {self.max_bytes} bytes")
 
-    def write(self, path: str, content: str, author: str, append: bool = False,
-              round_no: int | None = None) -> FileChange:
-        name = self._rel(path)
+    def write(self, path: str, content: str, author: str, round_no: int | None = None) -> FileChange:
+        """Replace the file content (the only write operation agents have: write_file)."""
+        name = self.rel(path)
         full = self._abs(name)
         before = full.read_text(encoding="utf-8") if full.exists() else ""
-        after = self.apply_op(before, content, append)
-        op = "append" if append else ("write" if full.exists() else "create")
+        after = content if isinstance(content, str) else str(content)
+        op = "write" if full.exists() else "create"
         self.check_size(after)
         full.write_text(after, encoding="utf-8")
 

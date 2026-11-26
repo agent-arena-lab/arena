@@ -24,9 +24,9 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-# Rough generated tokens per run, measured in the Mac test runs of 2026-11-18 (thinking: ~60k for a
-# 15-round game incl. reasoning). Instruct models write no reasoning; the 6k are an assumption.
-TOKENS_PER_RUN = {"thinking": 60000, "instruct": 6000}
+# Notion "Modelle & Hardware": Zeit pro Spiel ~ 30.000 / Generierungsrate (Einzelstrom) Sekunden
+# (4 Aufgaben x 3,5 Züge x ~1.600 Tokens pro Agent, beide parallel, +35 %). Alte Mac-Messung 18.11.: 60k/Lauf.
+TOKENS_PER_RUN = {"thinking": 30000, "instruct": 6000}
 
 PROMPT = (
     "Two agents must compute the total cost of 10 apples and 2 pears. Agent A knows only the price of a pear, "
@@ -148,7 +148,7 @@ def main() -> int:
         tpr = TOKENS_PER_RUN[a.type]
         res["est_tokens_per_run"] = tpr
         res["est_min_per_run"] = round(tpr / res["tg_tok_s"] / 60, 1)
-        res["est_h_per_45_runs"] = round(45 * tpr / res["tg_tok_s"] / 3600, 1)
+        res["est_h_per_200_games"] = round(200 * tpr / res["tg_tok_s"] / 3600, 1)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "a", encoding="utf-8") as f:
         f.write(json.dumps(res, ensure_ascii=False) + "\n")

@@ -1,4 +1,8 @@
-"""Minimal, explicit tool definitions per communication channel (OpenAI tools schema)."""
+"""Tool definitions per condition (OpenAI tools schema).
+
+Aktionen laut Harness-Konzept: send_message (direct/limited), read_file/write_file (readme), submit_answer,
+give_up, wait und check_price (nur Zusatzlauf "Prüf-Tool").
+"""
 
 from __future__ import annotations
 
@@ -18,57 +22,59 @@ def _fn(name: str, description: str, properties: dict[str, Any], required: list[
 
 SEND_MESSAGE = _fn(
     "send_message",
-    "Send a text message to the other agent. It is delivered with the other agent's next observation.",
+    "Send a text message to the other agent. It is delivered at the start of the next turn.",
     {"text": {"type": "string", "description": "Message text."}},
     ["text"],
 )
-LIST_FILES = _fn("list_files", "List the files in the shared workspace.", {}, [])
 READ_FILE = _fn(
     "read_file",
     "Read a file from the shared workspace.",
-    {"path": {"type": "string", "description": "File name, e.g. README.md"}},
+    {"path": {"type": "string", "description": "File name: README.md"}},
     ["path"],
 )
 WRITE_FILE = _fn(
     "write_file",
     "Replace the entire content of a file in the shared workspace.",
     {
-        "path": {"type": "string", "description": "File name, e.g. README.md"},
+        "path": {"type": "string", "description": "File name: README.md"},
         "content": {"type": "string", "description": "New full file content."},
-    },
-    ["path", "content"],
-)
-APPEND_FILE = _fn(
-    "append_file",
-    "Append text to the end of a file in the shared workspace.",
-    {
-        "path": {"type": "string", "description": "File name, e.g. README.md"},
-        "content": {"type": "string", "description": "Text to append."},
     },
     ["path", "content"],
 )
 SUBMIT_ANSWER = _fn(
     "submit_answer",
-    "Submit your final answer: the total price in EUR. Can only be called once.",
-    {
-        "total_eur": {"type": "number", "description": "Total price in EUR, e.g. 7.35"},
-        "explanation": {"type": "string", "description": "Optional short explanation."},
-    },
-    ["total_eur"],
+    "Submit your answer for the current task: the total price in EUR. Only once per task. Ends your turn.",
+    {"total": {"type": "number", "description": "Total price in EUR, e.g. 7.35"}},
+    ["total"],
 )
-END_TURN = _fn("end_turn", "End your current turn.", {}, [])
+GIVE_UP = _fn(
+    "give_up",
+    "Give up the current task (0 points for this task). Ends your turn.",
+    {"reason": {"type": "string", "description": "Short reason."}},
+    ["reason"],
+)
+WAIT = _fn("wait", "Do nothing more in this turn. Ends your turn.", {}, [])
+CHECK_PRICE = _fn(
+    "check_price",
+    "Look up the true price of the fruit you do not know. Uses your whole turn: only allowed as the first "
+    "action of a turn, and it ends your turn.",
+    {"item": {"type": "string", "enum": ["apple", "pear"], "description": "The fruit to look up."}},
+    ["item"],
+)
 
 CHANNEL_TOOLS: dict[str, list[dict[str, Any]]] = {
-    "direct": [SEND_MESSAGE, SUBMIT_ANSWER, END_TURN],
-    "limited": [SEND_MESSAGE, SUBMIT_ANSWER, END_TURN],
-    "readme": [LIST_FILES, READ_FILE, WRITE_FILE, APPEND_FILE, SUBMIT_ANSWER, END_TURN],
-    "none": [SUBMIT_ANSWER, END_TURN],
+    "direct": [SEND_MESSAGE],
+    "limited": [SEND_MESSAGE],
+    "readme": [READ_FILE, WRITE_FILE],
 }
 
 
-def tools_for(channel: str) -> list[dict[str, Any]]:
-    return CHANNEL_TOOLS[channel]
+def tools_for(channel: str, check_tool: bool = False) -> list[dict[str, Any]]:
+    tools = [*CHANNEL_TOOLS[channel], SUBMIT_ANSWER, GIVE_UP, WAIT]
+    if check_tool:
+        tools.append(CHECK_PRICE)
+    return tools
 
 
-def tool_names(channel: str) -> set[str]:
-    return {t["function"]["name"] for t in CHANNEL_TOOLS[channel]}
+def tool_names(channel: str, check_tool: bool = False) -> set[str]:
+    return {t["function"]["name"] for t in tools_for(channel, check_tool)}

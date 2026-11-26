@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,17 +20,26 @@ class EventLogger:
         self.run_id = run_id
         self.seq = 0
         self.t0 = time.monotonic()
+        self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
         self._fh = path.open("a", encoding="utf-8")
 
     def elapsed(self) -> float:
         return round(time.monotonic() - self.t0, 3)
 
+    def stamp(self) -> tuple[str, float]:
+        return utc_now(), self.elapsed()
+
     def log(self, event: str, **data: Any) -> dict[str, Any]:
-        self.seq += 1
-        rec = {"seq": self.seq, "ts": utc_now(), "t": self.elapsed(), "run_id": self.run_id, "event": event, **data}
-        self._fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-        self._fh.flush()
+        return self.log_at(event, *self.stamp(), **data)
+
+    def log_at(self, event: str, ts: str, t: float, **data: Any) -> dict[str, Any]:
+        """Write an event with a timestamp taken earlier (buffered events of parallel turns)."""
+        with self._lock:
+            self.seq += 1
+            rec = {"seq": self.seq, "ts": ts, "t": t, "run_id": self.run_id, "event": event, **data}
+            self._fh.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            self._fh.flush()
         return rec
 
     def close(self) -> None:

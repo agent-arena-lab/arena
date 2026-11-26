@@ -82,6 +82,9 @@ def export_experiment(exp_dir: Path, out_dir: Path | None = None, include_server
     logs = runs_root / "_server_logs"
     if include_server_logs and logs.is_dir():
         sources.append((logs, "_server_logs"))
+    system = runs_root / "_system"  # servers.json (GGUF + SHA-256, llama.cpp-Version, Server-Flags)
+    if system.is_dir():
+        sources.append((system, "_system"))
 
     entries: list[tuple[Path, str]] = []  # (absolute file, path inside the top folder)
     for src, prefix in sources:
@@ -89,7 +92,7 @@ def export_experiment(exp_dir: Path, out_dir: Path | None = None, include_server
             entries.append((f, f"{prefix}/{f.relative_to(src).as_posix()}"))
 
     run_dirs = [p for p in exp_dir.iterdir() if p.is_dir() and not p.name.startswith("_")]
-    complete = sum((p / "summary.json").exists() for p in run_dirs)
+    complete = sum((p / "result.json").exists() for p in run_dirs)
 
     manifest_lines: list[str] = []
     total_bytes = 0
@@ -107,8 +110,8 @@ def export_experiment(exp_dir: Path, out_dir: Path | None = None, include_server
         "git_commit": _git_commit(),
         "runs_total": len(run_dirs),
         "runs_complete": complete,
-        "runs_without_summary": sorted(p.name for p in run_dirs if not (p / "summary.json").exists()),
-        "includes_server_logs": len(sources) > 1,
+        "runs_without_result": sorted(p.name for p in run_dirs if not (p / "result.json").exists()),
+        "includes_server_logs": any(p == "_server_logs" for _, p in sources),
         "files": len(entries),
         "bytes": total_bytes,
     }
