@@ -27,7 +27,7 @@ def _sha(text: str) -> str:
 class FileChange:
     path: str
     author: str
-    op: str  # write | append | create
+    op: str  # write | append | create | delete
     before_sha: str
     after_sha: str
     diff: str
@@ -44,11 +44,13 @@ class FileChange:
 
 
 class Workspace:
-    def __init__(self, root: Path, max_bytes: int = 32_000, allowed_files: set[str] | None = None):
+    def __init__(self, root: Path, max_bytes: int = 32_000, allowed_files: set[str] | None = None,
+                 max_files: int = 20):
         root.mkdir(parents=True, exist_ok=True)
         self.root = root.resolve()
         self.max_bytes = max_bytes
         self.allowed_files = allowed_files  # None = any flat file name
+        self.max_files = max_files
         self.blame: dict[str, list[str]] = {}  # path -> author per line
         self.blame_round: dict[str, list[int]] = {}  # path -> round in which each line was written
         self.version: dict[str, int] = {}
@@ -90,6 +92,14 @@ class Workspace:
     def list_files(self) -> list[str]:
         return sorted(p.name for p in self.root.iterdir() if p.is_file() and not p.is_symlink())
 
+    def snapshot(self) -> dict[str, str]:
+        """Current content of all files (simultaneous rounds: base state for the private drafts)."""
+        return {name: (self.root / name).read_text(encoding="utf-8") for name in self.list_files()}
+
+    def check_new_file(self, existing: int) -> None:
+        if existing >= self.max_files:
+            raise SandboxError(f"workspace is limited to {self.max_files} files")
+
     def read(self, path: str) -> str:
         name = self._rel(path)
         full = self._abs(name)
@@ -119,6 +129,8 @@ class Workspace:
         after = self.apply_op(before, content, append)
         op = "append" if append else ("write" if full.exists() else "create")
         self.check_size(after)
+        if not full.exists():
+            self.check_new_file(len(self.list_files()))
         full.write_text(after, encoding="utf-8")
 
         old_lines, new_lines = before.splitlines(), after.splitlines()
@@ -161,4 +173,34 @@ class Workspace:
             )
         )
         return FileChange(name, author, op, _sha(before), _sha(after), diff, added, removed, removed_by,
+                          removed_unseen, round_no)
+
+    def delete(self, path: str, author: str, round_no: int | None = None) -> FileChange:
+        """Delete a file. All its lines count as removed (blame -> removed_by_author)."""
+        name = self._rel(path)
+        full = self._abs(name)
+        if not full.exists():
+            raise SandboxError(f"file '{name}' does not exist")
+        before = full.read_text(encoding="utf-8")
+        lines = before.splitlines()
+        blame = self.blame.get(name, ["unknown"] * len(lines))
+        rounds = self.blame_round.get(name, [0] * len(lines))
+        if len(blame) != len(lines):
+            blame = ["unknown"] * len(lines)
+        if len(rounds) != len(lines):
+            rounds = [0] * len(lines)
+        removed_by: dict[str, int] = {}
+        removed_unseen: dict[str, int] = {}
+        for who, rnd in zip(blame, rounds):
+            removed_by[who] = removed_by.get(who, 0) + 1
+            if round_no is not None and rnd == round_no and who != author:
+                removed_unseen[who] = removed_unseen.get(who, 0) + 1
+        full.unlink()
+        self.blame.pop(name, None)
+        self.blame_round.pop(name, None)
+        self.version[name] = self.version.get(name, 0) + 1
+        self.last_author[name] = author
+        diff = "".join(difflib.unified_diff(before.splitlines(keepends=True), [],
+                                            fromfile=f"a/{name}", tofile="/dev/null"))
+        return FileChange(name, author, "delete", _sha(before), _sha(""), diff, 0, len(lines), removed_by,
                           removed_unseen, round_no)

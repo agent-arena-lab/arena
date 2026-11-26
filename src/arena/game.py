@@ -22,7 +22,7 @@ from .llm import LLMClient, LLMError, LLMResponse, ToolCall
 from .logger import EventLogger
 from .prompts import PromptSet, fmt_price
 from .sandbox import SandboxError, Workspace
-from .tools import tool_names, tools_for
+from .tools import EFFECTIVE_TOOLS, tool_names, tools_for
 
 AGENTS = ("A", "B")
 OTHER_FRUIT = {"apple": "pear", "pear": "apple"}
@@ -88,8 +88,13 @@ class AgentState:
     msgs_sent: int = 0
     msgs_rejected: int = 0
     truncated_responses: int = 0  # finish_reason == "length" (max_tokens reached)
-    draft: str = ""  # simultaneous mode: README as this agent sees it during the round
-    pending_ops: list[tuple[str, str, bool]] = field(default_factory=list)  # (path, content, append)
+    idle_turns: int = 0  # turns without any effective action (see tools.EFFECTIVE_TOOLS)
+    nudges: int = 0
+    # simultaneous mode: workspace as this agent sees it during the round (path -> content)
+    drafts: dict[str, str] = field(default_factory=dict)
+    pending_ops: list[tuple[str, str, str]] = field(default_factory=list)  # (op, path, content)
+    acted: bool = False  # effective action in the current turn
+    reads_this_turn: dict[str, str] = field(default_factory=dict)  # path -> content at last read
 
     def stats(self) -> dict[str, Any]:
         return {
@@ -105,6 +110,8 @@ class AgentState:
             "msgs_sent": self.msgs_sent,
             "msgs_rejected": self.msgs_rejected,
             "truncated_responses": self.truncated_responses,
+            "idle_turns": self.idle_turns,
+            "nudges": self.nudges,
             "submission": asdict(self.submission) if self.submission else None,
         }
 
@@ -151,6 +158,7 @@ class Game:
         self.call_counter = 0
         self.action_counter = 0
         self.round = 0
+        self.stall_count = 0
         self.agents: dict[str, AgentState] = {}
         for name in AGENTS:
             other = "B" if name == "A" else "A"
@@ -173,6 +181,7 @@ class Game:
             channel=self.spec.channel,
             persona=self.spec.persona,
             selection_rule=self.spec.selection_rule,
+            stall_rounds=self.g.stall_rounds,
         )
 
     def _key(self, st: AgentState) -> str:
@@ -192,7 +201,7 @@ class Game:
             simultaneous=self.simultaneous,
         )
         if self.ws is not None:
-            self.ws.init_file("README.md", README_INIT)
+            self.ws.init_file("README.md", self.g.readme_init or README_INIT)
             for st in self.agents.values():
                 st.seen_versions["README.md"] = 0
 
@@ -202,6 +211,7 @@ class Game:
             for rnd in range(1, self.g.max_rounds + 1):
                 self.round = rnd
                 self.log.log("round_start", round=rnd)
+                active = [k for k in order if self.agents[k].submission is None]
                 if self.simultaneous:
                     self._play_simultaneous_round(order)
                 else:
@@ -210,6 +220,9 @@ class Game:
                         if st.submission is None:
                             self._take_turn(st)
                 if all(a.submission for a in self.agents.values()):
+                    break
+                if self._stalled(active):
+                    status = "stalled"
                     break
             else:
                 status = "max_rounds"
@@ -229,47 +242,70 @@ class Game:
             "agents": {k: a.stats() for k, a in self.agents.items()},
         }
 
+    def _stalled(self, active: list[str]) -> bool:
+        """True if all agents that played this round were idle for `stall_rounds` rounds in a row."""
+        if not active:
+            return False
+        idle = all(not self.agents[k].acted for k in active)
+        self.stall_count = self.stall_count + 1 if idle else 0
+        if idle:
+            self.log.log("idle_round", round=self.round, consecutive=self.stall_count)
+        if self.g.stall_rounds and self.stall_count >= self.g.stall_rounds:
+            self.log.log("stalled", round=self.round, consecutive=self.stall_count)
+            return True
+        return False
+
     # ------------------------------------------------------------------ simultaneous rounds
     def _play_simultaneous_round(self, order: list[str]) -> None:
         active = [k for k in order if self.agents[k].submission is None]
-        base = self.ws.read("README.md") if self.ws is not None else ""
+        base = self.ws.snapshot() if self.ws is not None else {}
         # Both observations are built BEFORE anyone acts -> identical information state.
         observations = {k: self._observation(self.agents[k]) for k in active}
         for k in active:
             st = self.agents[k]
-            st.draft = base
+            st.drafts = dict(base)
             st.pending_ops.clear()
         for k in active:
             self._take_turn(self.agents[k], observations[k])
         self._resolve_round(order)
 
     def _resolve_round(self, order: list[str]) -> None:
-        """Apply the README edits of this round to the shared file (first mover first)."""
-        changed: dict[str, bool] = {k: False for k in order}
+        """Apply the file edits of this round to the shared workspace (first mover first)."""
+        changed: dict[str, dict[str, str]] = {k: {} for k in order}  # agent -> path -> last op
         if self.ws is not None:
             for k in order:
                 st = self.agents[k]
-                for path, content, append in st.pending_ops:
+                for op, path, content in st.pending_ops:
                     try:
-                        change = self.ws.write(path, content, st.name, append=append, round_no=self.round)
+                        if op == "delete":
+                            change = self.ws.delete(path, st.name, round_no=self.round)
+                        else:
+                            change = self.ws.write(path, content, st.name, append=(op == "append"),
+                                                   round_no=self.round)
                     except SandboxError as exc:
-                        self.log.log("file_change_failed", agent=st.name, round=self.round, error=str(exc))
+                        self.log.log("file_change_failed", agent=st.name, round=self.round, path=path, op=op,
+                                     error=str(exc))
                         continue
-                    changed[k] = True
+                    changed[k][path] = op
                     self.log.log("file_change", agent=st.name, **change.to_dict())
                 st.pending_ops.clear()
             for k in order:
                 other_key = "B" if k == "A" else "A"
-                if changed[other_key] and self.g.notify_file_changes:
+                if not self.g.notify_file_changes:
+                    break
+                for path, op in changed[other_key].items():
+                    key = "file_deleted" if op == "delete" and self.prompts.has_turn("file_deleted") else "file_changed"
                     self.agents[k].pending_notes.append(
-                        self.prompts.turn("file_changed", path="README.md", other_name=self.agents[other_key].name,
-                                          round=self.round))
-        self.log.log("round_resolved", round=self.round, file_changes={f"Agent {k}": v for k, v in changed.items()})
+                        self.prompts.turn(key, path=path, other_name=self.agents[other_key].name, round=self.round))
+        self.log.log("round_resolved", round=self.round,
+                     file_changes={f"Agent {k}": bool(v) for k, v in changed.items()},
+                     file_ops={f"Agent {k}": v for k, v in changed.items()})
 
     # ------------------------------------------------------------------ turns
     def _observation(self, st: AgentState) -> str:
         p, other = self.prompts, self._other(st)
-        lines = [p.turn("header", round=self.round, max_rounds=self.g.max_rounds)]
+        lines = [p.turn("header", round=self.round, max_rounds=self.g.max_rounds,
+                        rounds_left=self.g.max_rounds - self.round + 1)]
         if self.round == self.g.max_rounds:
             lines.append(p.turn("last_round"))
         events: list[str] = []
@@ -300,6 +336,10 @@ class Game:
             obs = self._observation(st)
         st.messages.append({"role": "user", "content": obs})
         self.log.log("turn_start", agent=st.name, round=self.round, observation=obs)
+        st.acted = False
+        st.reads_this_turn.clear()
+        nudged = False
+        tools_used: list[str] = []
 
         for step in range(1, self.g.max_steps_per_turn + 1):
             resp = self._call_llm(st, step)
@@ -311,12 +351,25 @@ class Game:
 
             if not valid_calls:
                 st.no_tool_responses += 1
-                self.log.log("no_tool_call", agent=st.name, round=self.round, step=step, visible=resp.content)
+                self.log.log("no_tool_call", agent=st.name, round=self.round, step=step, visible=resp.content,
+                             finish_reason=resp.finish_reason)
+                if self.g.nudge_no_tool and not nudged and step < self.g.max_steps_per_turn:
+                    # Without the nudge the turn would silently end and the round would be wasted.
+                    nudged = True
+                    st.nudges += 1
+                    note = (self.prompts.turn("nudge_no_tool") if self.prompts.has_turn("nudge_no_tool") else
+                            "You did not call any tool, so nothing happened. Act now with a tool call "
+                            "(call `end_turn` to do nothing).")
+                    st.messages.append({"role": "user", "content": note})
+                    self.log.log("nudge", agent=st.name, round=self.round, step=step, text=note)
+                    continue
+                tools_used.append("<no_tool_call>")
                 break  # free text without action ends the turn (text is not delivered anywhere)
 
             turn_over = False
             for call in valid_calls:
                 result, ends = self._exec(st, call)
+                tools_used.append(call.name)
                 st.messages.append({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": result})
                 turn_over = turn_over or ends
             if turn_over:
@@ -324,7 +377,10 @@ class Game:
         else:
             st.max_steps_hit += 1
             self.log.log("max_steps_reached", agent=st.name, round=self.round)
-        self.log.log("turn_end", agent=st.name, round=self.round)
+        if not st.acted:
+            st.idle_turns += 1
+            self.log.log("idle_turn", agent=st.name, round=self.round, tools=tools_used)
+        self.log.log("turn_end", agent=st.name, round=self.round, acted=st.acted)
 
     def _call_llm(self, st: AgentState, step: int) -> LLMResponse:
         self.call_counter += 1
@@ -364,6 +420,8 @@ class Game:
         result, ends, ok = self._dispatch(st, call)
         if not ok:
             st.invalid_tool_calls += 1
+        elif call.name in EFFECTIVE_TOOLS:
+            st.acted = True
         self.log.log("tool_call", agent=st.name, round=self.round, action=self.action_counter, name=call.name,
                      arguments=call.arguments, ok=ok, result=result, ends_turn=ends)
         return result, ends
@@ -401,10 +459,14 @@ class Game:
 
         assert self.ws is not None
         try:
+            if self.simultaneous and name in ("list_files", "read_file", "write_file", "append_file", "delete_file"):
+                return self._draft_op(st, name, args)
             if name == "list_files":
                 return json.dumps(self.ws.list_files()), False, True
-            if self.simultaneous and name in ("read_file", "write_file", "append_file"):
-                return self._draft_op(st, name, args)
+            if name == "delete_file":
+                change = self.ws.delete(args.get("path", ""), st.name, round_no=self.round)
+                self.log.log("file_change", agent=st.name, **change.to_dict())
+                return f"OK: {change.path} deleted.", False, True
             if name == "read_file":
                 content = self.ws.read(args.get("path", ""))
                 self.log.log("file_read", agent=st.name, path=args.get("path"), round=self.round)
@@ -421,18 +483,41 @@ class Game:
         return f"ERROR: tool '{name}' not implemented.", False, False
 
     def _draft_op(self, st: AgentState, name: str, args: dict[str, Any]) -> tuple[str, bool, bool]:
-        """Simultaneous mode: reads/writes act on the agent's private draft of this round."""
+        """Simultaneous mode: file tools act on the agent's private draft of the workspace for this round."""
         assert self.ws is not None
+        if name == "list_files":
+            return json.dumps(sorted(st.drafts)), False, True
         path = self.ws._rel(args.get("path", ""))  # same path validation as the real workspace
         if name == "read_file":
+            if path not in st.drafts:
+                return f"ERROR: file '{path}' does not exist", False, False
+            content = st.drafts[path]
             self.log.log("file_read", agent=st.name, path=path, round=self.round, draft=True)
-            return st.draft if st.draft else "(empty file)", False, True
+            out = content if content else "(empty file)"
+            if self.g.hint_unchanged_reads and st.reads_this_turn.get(path) == content:
+                hint = (self.prompts.turn("read_unchanged", other_name=st.other)
+                        if self.prompts.has_turn("read_unchanged") else
+                        "(Unchanged since your last read in this turn.)")
+                self.log.log("reread_unchanged", agent=st.name, path=path, round=self.round)
+                out = f"{out}\n\n{hint}"
+            st.reads_this_turn[path] = content
+            return out, False, True
+        if name == "delete_file":
+            if path not in st.drafts:
+                return f"ERROR: file '{path}' does not exist", False, False
+            del st.drafts[path]
+            st.pending_ops.append(("delete", path, ""))
+            self.log.log("file_change_pending", agent=st.name, round=self.round, path=path, op="delete")
+            return f"OK: {path} deleted. {st.other} will see the change from the next round on.", False, True
         content = args.get("content", "")
+        content = content if isinstance(content, str) else str(content)
         append = name == "append_file"
-        new = self.ws.apply_op(st.draft, content, append)
+        if path not in st.drafts:
+            self.ws.check_new_file(len(st.drafts))
+        new = self.ws.apply_op(st.drafts.get(path, ""), content, append)
         self.ws.check_size(new)
-        st.draft = new
-        st.pending_ops.append((path, content if isinstance(content, str) else str(content), append))
+        st.drafts[path] = new
+        st.pending_ops.append(("append" if append else "write", path, content))
         self.log.log("file_change_pending", agent=st.name, round=self.round, path=path,
                      op="append" if append else "write", content=content)
         return f"OK: {path} updated. {st.other} will see the change from the next round on.", False, True

@@ -1,4 +1,4 @@
-"""Expands the experiment matrix and executes runs sequentially (resumable)."""
+"""Expands the experiment matrix and executes runs (resumable; optionally parallel with a time budget)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ import random
 import shutil
 import socket
 import subprocess
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable
 
@@ -54,7 +56,14 @@ def build_specs(cfg: ExperimentCfg, model: str) -> list[RunSpec]:
                 seed=_stable_seed(f"{cfg.base_seed}:{run_id}"), prices={"apple": apple, "pear": pear},
                 first_mover=first, quantities=dict(g.quantities),
             ))
-    if cfg.shuffle_run_order:  # avoid temporal confounds (thermal throttling, cache, ...)
+    if cfg.balanced_order:  # rep 1 complete before rep 2 ... -> balanced cells if a time budget cuts off
+        ordered: list[RunSpec] = []
+        for rep in range(1, cfg.repetitions + 1):
+            block = [s for s in specs if s.rep == rep]
+            random.Random(cfg.base_seed + 1000 + rep).shuffle(block)
+            ordered.extend(block)
+        specs = ordered
+    elif cfg.shuffle_run_order:  # avoid temporal confounds (thermal throttling, cache, ...)
         random.Random(cfg.base_seed).shuffle(specs)
     return specs
 
@@ -113,8 +122,13 @@ def run_one(
     write_json(run_dir / "meta.json", meta)
 
     logger = EventLogger(run_dir / "events.jsonl", spec.run_id)
-    ws = Workspace(run_dir / "shared", cfg.game.max_file_bytes, allowed_files={"README.md"}) \
-        if spec.channel == "readme" else None
+    if spec.channel == "readme":
+        ws = Workspace(run_dir / "shared", cfg.game.max_file_bytes, allowed_files={"README.md"})
+    elif spec.channel == "arena":  # any flat file name, may be created and deleted
+        ws = Workspace(run_dir / "shared", cfg.game.max_file_bytes, allowed_files=None,
+                       max_files=cfg.game.max_files)
+    else:
+        ws = None
     game = Game(spec, cfg, prompts, client, logger, ws)
     try:
         result = game.run()
@@ -159,6 +173,8 @@ def run_experiment(
     only: Callable[[RunSpec], bool] | None = None,
     force: bool = False,
     print_fn: Callable[[str], None] = print,
+    workers: int = 1,
+    budget_min: float | None = None,
 ) -> list[dict[str, Any]]:
     model_cfg_source = resolve_model(cfg, model)
     if model_cfg_source == "catalog":
@@ -179,19 +195,52 @@ def run_experiment(
     write_json(out_dir / f"plan_{model}.json", [s.to_dict() for s in specs])
 
     done: list[dict[str, Any]] = []
-    executed = 0
-    for i, spec in enumerate(specs, 1):
-        if limit is not None and executed >= limit:
-            break
+    failed: list[str] = []
+    lock = threading.Lock()
+    deadline = time.monotonic() + budget_min * 60 if budget_min is not None else None
+    todo = [(i, spec) for i, spec in enumerate(specs, 1)
+            if force or not (experiment_dir(cfg) / spec.run_id / "summary.json").exists()]
+    skipped = len(specs) - len(todo)
+    if skipped:
+        print_fn(f"[arena] {skipped} runs already done (skipped)")
+    if limit is not None:
+        todo = todo[:limit]
+
+    def _one(i: int, spec: RunSpec) -> None:
         t0 = time.monotonic()
-        summary = run_one(spec, cfg, prompts, client, server_info, config_sha, force=force)
+        try:
+            summary = run_one(spec, cfg, prompts, client, server_info, config_sha, force=force)
+        except Exception as exc:  # one broken run must not stop an unattended batch
+            with lock:
+                failed.append(spec.run_id)
+                print_fn(f"[{i}/{len(specs)}] {spec.run_id}: FAILED {exc!r} (incomplete, rerun resumes it)")
+            return
         if summary is None:
-            print_fn(f"[{i}/{len(specs)}] skip (done) {spec.run_id}")
-            continue
-        executed += 1
+            return
         o = summary["outcome"]
-        print_fn(f"[{i}/{len(specs)}] {spec.run_id}: status={summary['status']} winner={o['winner']} "
-                 f"correct={o['n_correct']}/{o['n_submissions']} ({time.monotonic() - t0:.1f}s)")
-        done.append(summary)
-    print_fn(json.dumps({"executed": executed, "planned": len(specs), "out": str(out_dir)}))
+        with lock:
+            done.append(summary)
+            print_fn(f"[{i}/{len(specs)}] {spec.run_id}: status={summary['status']} winner={o['winner']} "
+                     f"correct={o['n_correct']}/{o['n_submissions']} rounds={summary['rounds_played']} "
+                     f"({time.monotonic() - t0:.1f}s, {len(done)} done)")
+
+    not_started = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        running: set[Future] = set()
+        queue = list(todo)
+        while queue or running:
+            while queue and len(running) < max(1, workers):
+                if deadline is not None and time.monotonic() >= deadline:
+                    not_started = len(queue)
+                    print_fn(f"[arena] time budget of {budget_min} min reached: {not_started} runs not started, "
+                             f"waiting for {len(running)} running runs")
+                    queue.clear()
+                    break
+                i, spec = queue.pop(0)
+                running.add(pool.submit(_one, i, spec))
+            if not running:
+                break
+            finished, running = wait(running, return_when=FIRST_COMPLETED)
+    print_fn(json.dumps({"executed": len(done), "planned": len(specs), "skipped_done": skipped,
+                         "not_started_budget": not_started, "failed": failed, "workers": workers, "out": str(out_dir)}))
     return done

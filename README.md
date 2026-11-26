@@ -47,7 +47,27 @@ curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/uninstal
 Marker `.arena-installed`), das Docker-Image `arena-harness` samt Containern, brew-/apt-Pakete **nur wenn
 `install.sh` sie selbst installiert hat**, zuletzt `~/.arena`. Laufender `llama-server` wird vorher gestoppt.
 
-## Modell auswählen (Speedtest)
+## Cloud-GPU (z. B. IONOS H200): Battle-Batch in ~2 h
+
+Zusatz-Batch mit maximaler Konfliktfläche (nicht das Kern-Design). Handout: [`docs/handout/battle_h200_handout.pdf`](docs/handout/battle_h200_handout.pdf).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/agent-arena-lab/arena/main/install.sh | bash   # Linux x86_64 + NVIDIA
+tmux new -s arena
+cd ~/arena && scripts/battle.sh      # ARENA_BUDGET_MIN=60  ARENA_WORKERS=12  ARENA_CTX=32768
+```
+
+* `install.sh` erkennt Linux x86_64 mit `nvidia-smi`, installiert bei Bedarf das passende CUDA-Toolkit, baut
+  llama.cpp für die erkannte GPU-Architektur und lädt die beiden 30B-Modelle parallel zum Build (`scripts/setup_cuda_linux.sh`).
+* `scripts/battle.sh` startet pro Modell `llama-server` mit `2 × ARENA_WORKERS` Slots und spielt `ARENA_WORKERS`
+  Läufe gleichzeitig (`arena run --workers N --budget-min M`). Nach dem Zeitbudget starten keine neuen Läufe;
+  `balanced_order` sorgt dafür, dass die Zellen trotzdem ausgeglichen sind.
+* `configs/battle_h200.yaml` + `prompts/v6`: Kanal `arena` (Nachrichten + Dateien anlegen/überschreiben/löschen),
+  Personas `survive`/`deceive`, 8 Runden, Preistafel in der README.
+* Gegen verschenkte Runden (Config `game:`): `nudge_no_tool`, `stall_rounds`, `hint_unchanged_reads`. Gemessen werden
+  `idle_turn`, `stalled`, `rounds_waited_after_info`, `had_info_never_submitted`; Überblick in `_analysis/highlights.md`.
+
+
 
 Bevor die Hauptläufe starten, lohnt sich ein Speedtest der Kandidaten auf genau dem Gerät, auf dem gerechnet
 wird. Das ist besonders auf dem Jetson (CUDA) wichtig: Dort zeigt der Test auch, ob das Modell **komplett

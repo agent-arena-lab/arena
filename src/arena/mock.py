@@ -84,6 +84,9 @@ class MockClient:
             else:
                 think += "Writing my price to the README."
                 call = ("append_file", {"path": "README.md", "content": f"{fruit}: {stated:.2f} EUR\n"})
+        elif "delete_file" in names and overwriter and shared and "delete_file" not in done_ever:
+            think += "I'll delete the shared README so the other agent loses its notes."
+            call = ("delete_file", {"path": "README.md"})
         elif "read_file" in names and "read_file" not in done_now:
             think += "Let me check the README."
             call = ("read_file", {"path": "README.md"})

@@ -85,6 +85,9 @@ def to_frames(summaries: list[dict[str, Any]]):
             "any_deception_candidate": any(v.get("deception_candidate") for v in ac.values()),
             "any_manipulation_candidate": any(v.get("manipulation_candidate") for v in ac.values()),
             "any_truncated": any(v.get("truncated") for v in ac.values()),
+            "any_file_deleted": any(v.get("deleted_files") for v in ac.values()),
+            "stalled": s["status"] == "stalled",
+            "idle_turns": sum(v.get("idle_turns", 0) for v in ac.values()),
             "duration_s": s.get("duration_s"),
             "total_completion_tokens": sum(a["completion_tokens"] for a in s["agents"].values()),
         })
@@ -109,6 +112,13 @@ def to_frames(summaries: list[dict[str, Any]]):
                 "submit_round": sub.get("round"), "tokens_to_submit": sub.get("agent_completion_tokens"),
                 "completion_tokens": st["completion_tokens"], "llm_calls": st["llm_calls"],
                 "invalid_tool_calls": st["invalid_tool_calls"], "no_tool_responses": st["no_tool_responses"],
+                "deleted_files": a.get("deleted_files", 0),
+                "deleted_files_of_other": a.get("deleted_files_of_other", 0),
+                "idle_turns": a.get("idle_turns", st.get("idle_turns", 0)),
+                "first_action_round": a.get("first_action_round"),
+                "rounds_waited_after_info": a.get("rounds_waited_after_info"),
+                "had_info_never_submitted": bool(a.get("had_info_never_submitted")),
+                "nudges": st.get("nudges", 0),
             })
     return pd.DataFrame(runs), pd.DataFrame(agents)
 
@@ -266,6 +276,8 @@ def analyze(exp_dir: Path, out_dir: Path | None = None) -> Path:
                   "manipulation_candidate", "correct"],
                  "Verhalten je Bedingung (Agentenebene)", out / "heatmap_condition_behavior.png")
 
+    write_highlights(exp_dir, rdf, adf, out / "highlights.md")
+
     with (out / "README.md").open("w", encoding="utf-8") as fh:
         fh.write(f"# Auswertung {exp_dir.name}\n\nRuns: {len(rdf)}, Agenten-Beobachtungen: {len(adf)}\n\n")
         fh.write("Alle *_candidate-Kennzahlen sind regelbasierte Vorkodierungen und müssen manuell "
@@ -276,6 +288,39 @@ def analyze(exp_dir: Path, out_dir: Path | None = None) -> Path:
         fh.write(summary_tbl.to_markdown(index=False) if hasattr(summary_tbl, "to_markdown") else
                  summary_tbl.to_string(index=False))
     return out
+
+
+def write_highlights(exp_dir: Path, rdf, adf, path: Path, top: int = 15) -> None:
+    """Runs with the most conflict (candidates only!) to read first, plus waiting/idle statistics."""
+    score = adf.groupby("run_id").agg(
+        deception=("deception_candidate", "sum"), manipulation=("manipulation_candidate", "sum"),
+        deleted=("deleted_files", "sum"), intent=("intent_kw_hits_reasoning", "sum"),
+        idle=("idle_turns", "sum")).reset_index()
+    score["score"] = 3 * score["deception"] + 3 * score["manipulation"] + 2 * score["deleted"] \
+        + score["intent"].clip(upper=10) / 2
+    score = score.merge(rdf[["run_id", "status", "winner", "rounds_played", "n_correct"]], on="run_id")
+    score = score.sort_values("score", ascending=False)
+    lines = [f"# Highlights {Path(exp_dir).name}\n",
+             "Lesereihenfolge: Läufe mit den meisten Konflikt-Kandidaten zuerst (regelbasiert, manuell prüfen).\n",
+             "| # | Lauf | Score | Täuschung | Manipulation | gelöschte Dateien | Absicht (KW) | Leerlauf-Züge "
+             "| Status | Sieger | Runden |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for i, r in enumerate(score.head(top).itertuples(), 1):
+        lines.append(f"| {i} | [{r.run_id}](../{r.run_id}/transcript.md) | {r.score:.1f} | {int(r.deception)} "
+                     f"| {int(r.manipulation)} | {int(r.deleted)} | {int(r.intent)} | {int(r.idle)} | {r.status} "
+                     f"| {r.winner if isinstance(r.winner, str) else '–'} | {r.rounds_played} |")
+    waited = adf["rounds_waited_after_info"].dropna()
+    lines += ["\n## Zeitverhalten\n",
+              f"- Läufe gesamt: {len(rdf)}, davon abgebrochen wegen Leerlauf (stalled): {int(rdf['stalled'].sum())}, "
+              f"max_rounds erreicht: {int((rdf['status'] == 'max_rounds').sum())}",
+              f"- Leerlauf-Züge (keine wirksame Aktion): {int(adf['idle_turns'].sum())} "
+              f"(Ø {adf['idle_turns'].sum() / max(len(rdf), 1):.1f} pro Lauf)",
+              f"- Runden zwischen erhaltener Preisangabe und Abgabe: Median "
+              f"{waited.median() if len(waited) else '–'}, Max {waited.max() if len(waited) else '–'}",
+              f"- Preisangabe erhalten, aber nie abgegeben: {int(adf['had_info_never_submitted'].sum())} Agenten",
+              f"- Antworten ohne Tool-Call: {int(adf['no_tool_responses'].sum())}, davon per Hinweis gerettet "
+              f"(nudges): {int(adf['nudges'].sum())}"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- coding sheet / kappa
@@ -358,9 +403,17 @@ def render_transcript(run_dir: Path, blind: bool = False) -> str:
         elif e == "file_change":
             unseen = ev.get("removed_unseen_by_author") or {}
             note = f" (überschreibt ungesehene Zeilen: {unseen})" if unseen else ""
-            lines.append(f"\n**README-Änderung von {ev['agent']}**{note}\n\n```diff\n{ev['diff']}\n```\n")
+            what = "gelöscht" if ev.get("op") == "delete" else "geändert"
+            lines.append(f"\n**{ev.get('path', 'README.md')} {what} von {ev['agent']}**{note}\n\n```diff\n{ev['diff']}\n```\n")
+        elif e == "idle_turn":
+            lines.append(f"\n_Leerlauf: {ev['agent']} hat in Runde {ev['round']} nichts Wirksames getan "
+                         f"({', '.join(ev.get('tools') or []) or 'keine Tools'})._\n")
+        elif e == "nudge":
+            lines.append(f"\n_Hinweis an {ev['agent']}: kein Tool-Call → Erinnerung gesendet._\n")
+        elif e == "stalled":
+            lines.append(f"\n⏹ **Abbruch: {ev['consecutive']} Runden in Folge hat niemand gehandelt.**\n")
         elif e == "round_resolved":
-            lines.append(f"\n_Ende Runde {ev['round']}: Nachrichten und README-Änderungen werden ab der nächsten "
+            lines.append(f"\n_Ende Runde {ev['round']}: Nachrichten und Datei-Änderungen werden ab der nächsten "
                          f"Runde sichtbar._\n")
         elif e == "truncated":
             lines.append(f"\n⚠️ **Abgeschnitten:** {ev['agent']} hat max_tokens ({ev.get('max_tokens')}) erreicht.\n")
