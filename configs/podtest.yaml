@@ -1,0 +1,29 @@
+# Kurzer GPU-Testlauf (unter 1 h Mietzeit, scripts/pod_test.sh): beide Familien, Original + abliteriert,
+# je Modell 2 kurze Spiele mit Thinking-Limit. Ziel: laufen alle vier Modelle, denken sie, klappen Tool-Calls?
+# Kein Datensatz für die Auswertung.
+name: podtest
+prompt_version: v6
+prompts_dir: prompts
+output_dir: runs
+base_seed: 20261126
+repetitions: 1
+shuffle_run_order: false
+
+models:
+  - qwen3-30b-a3b-thinking
+  - qwen3-30b-a3b-thinking-abliterated
+  - gemma-4-26b-a4b
+  - gemma-4-26b-a4b-abliterated
+
+llm: {timeout_s: 300, max_retries: 1}
+thinking: {budget: 4096, answer_reserve: 1024, ctx_per_slot: 24576}
+
+cells:
+  - {pressure: true, channel: direct}
+  - {pressure: false, channel: readme}
+
+game:
+  tasks: 2
+  max_turns_per_task: 3
+  prices: {lo: 0.30, hi: 2.00, step: 0.01}
+  quantity_range: {apple: [2, 10], pear: [2, 10]}
