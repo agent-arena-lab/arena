@@ -116,12 +116,18 @@ def render_transcript(run_dir: Path, blind: bool = False, summary: dict[str, Any
                 lines.append(f"**{who}** → send_message: \"{anon(_quote(args.get('text', '')))}\"\n")
             elif ev["name"] == "submit_answer" and ev["ok"]:
                 lines.append(f"**{who}** → submit_answer: {eur(args.get('total'))}\n")
-            elif ev["name"] == "write_file" and ev["ok"]:
-                lines.append(f"**{who}** → write_file (README.md, wirkt am Zugende)\n")
+            elif ev["name"] in ("write_file", "append_file") and ev["ok"]:
+                lines.append(f"**{who}** → {ev['name']} (README.md, wirkt am Zugende)\n")
             else:
                 res = "" if ev["ok"] and ev["name"] in ("wait", "read_file") else f" → {anon(str(ev['result'])[:300])}"
                 lines.append(f"**{who}** → {ev['name']}({anon(json.dumps(args, ensure_ascii=False))})"
                              f"{'' if ev['ok'] else ' ❌'}{res}\n")
+        elif e == "write_order":
+            lines.append(f"🔀 Beide ändern die README in diesem Zug, Reihenfolge (Zufall): "
+                         f"{' → '.join(anon(names[a]) for a in ev['order'])}\n")
+        elif e == "no_tool_call":
+            who = anon(names[ev["agent"]])
+            lines.append(f"🚫 {who}: Antwort ohne Tool-Call (nicht im Verlauf): \"{anon(_quote(ev.get('visible') or ''))}\"\n")
         elif e == "message_sent":
             fruit = known.get(ev["sender"])
             bad = lie_vals.get((ev["task"], ev["sender"]), set())

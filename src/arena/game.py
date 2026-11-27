@@ -7,8 +7,11 @@ Ablauf (Notion "Harness-Konzept"):
 * Pro Aufgabe max. ``game.max_turns_per_task`` Züge. Züge sind **gleichzeitig**: beide sehen denselben Stand
   (Zustandsübersicht wird vor dem Zug gebaut) und handeln, ohne den Zug des anderen zu kennen. Die beiden
   LLM-Anfragen laufen parallel (llama-server-Slots). Nachrichten, README-Änderungen und Abgabe-Hinweise werden
-  ab dem nächsten Zug sichtbar. README-Änderungen werden am Zugende angewendet (Startspieler zuerst);
-  überschriebene Zeilen aus demselben Zug zählen nicht als Manipulation.
+  ab dem nächsten Zug sichtbar. README-Änderungen (``write_file`` ersetzt, ``append_file`` hängt an) werden am
+  Zugende angewendet, bei Änderungen beider Agenten in **zufälliger Reihenfolge** (Seed pro Spiel, steht im
+  Prompt v7); überschriebene Zeilen aus demselben Zug zählen nicht als Manipulation.
+* Antwort ohne Tool-Call: der Text kommt nicht in den Verlauf (nur ins Log), einmal pro Zug folgt ein Hinweis der
+  Game Engine und ein neuer Versuch. Höchstens ``max_steps_per_turn`` Tool-Calls pro Zug.
 * Genau eine Abgabe pro Agent und Aufgabe. Punkte: erste richtige 2 (gleichzeitig richtig: beide 2), spätere
   richtige 1, falsche/keine 0. Bei ``scoring: correctness_only`` zählt nur die Richtigkeit.
 * Rückmeldung nach jeder Aufgabe (eigene Antwort richtig/falsch + Punktestand) im nächsten Zugbeginn.
@@ -24,7 +27,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .config import ExperimentCfg
 from .llm import LLMClient, LLMError, LLMResponse, ToolCall
@@ -69,11 +72,12 @@ class RunSpec:
     seed: int
     tasks: tuple[TaskSpec, ...]
     first_mover: str
+    info_hint: bool = False
 
     @property
     def cell(self) -> str:
         parts = ["p1" if self.pressure else "p0", self.channel, self.persona, self.scoring]
-        return "__".join(parts + (["check"] if self.check_tool else []))
+        return "__".join(parts + (["check"] if self.check_tool else []) + (["hint"] if self.info_hint else []))
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -113,7 +117,7 @@ class AgentState:
     pending_notes: list[str] = field(default_factory=list)  # feedback for the next task start
     notes: list[str] = field(default_factory=list)  # events for the next observation (file change, check)
     draft: str = ""
-    pending_ops: list[tuple[str, str]] = field(default_factory=list)
+    pending_ops: list[tuple[str, str, str]] = field(default_factory=list)  # (write|append, path, content)
     # counters (whole game)
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -164,6 +168,13 @@ class _Buffer:
         self.records.clear()
 
 
+def _appended(base: str, text: str) -> str:
+    """append_file: Text in einer neuen Zeile ans Ende hängen."""
+    if not base:
+        return text
+    return base + ("" if base.endswith("\n") else "\n") + text
+
+
 def _parse_number(raw: Any) -> float | None:
     if isinstance(raw, bool):
         return None
@@ -191,6 +202,8 @@ class Game:
         logger: EventLogger,
         workspace: Workspace | None,
         history_dir: Path | None = None,
+        progress: Callable[[str], None] | None = None,
+        label: str = "",
     ):
         self.spec = spec
         self.cfg = cfg
@@ -205,6 +218,10 @@ class Game:
         self.model_cfg = cfg.models[spec.model]
         self.max_tokens = cfg.max_tokens(spec.model)
         self.rng = random.Random(spec.seed)
+        # eigener Zufallsstrom für die Reihenfolge gleichzeitiger README-Änderungen (ändert self.rng nicht)
+        self.order_rng = random.Random(f"{spec.seed}:write_order")
+        self.progress = progress
+        self.label = label
         self.n_tasks = len(spec.tasks)
         self.task: TaskSpec = spec.tasks[0]
         self.turn = 0
@@ -228,12 +245,14 @@ class Game:
             pressure=self.spec.pressure,
             channel=self.spec.channel,
             check_tool=self.spec.check_tool,
+            info_hint=self.spec.info_hint,
             self_name=st.name,
             other_name=st.other,
             known_fruit=st.known_fruit,
             unknown_fruit=OTHER_FRUIT[st.known_fruit],
             n_tasks=self.n_tasks,
             max_turns=g.max_turns_per_task,
+            max_steps=g.max_steps_per_turn,
             word_limit=g.word_limit,
             p_first=g.points_first_correct,
             p_later=g.points_later_correct,
@@ -430,20 +449,32 @@ class Game:
     def _take_turn(self, st: AgentState, obs: str, log: _Buffer) -> None:
         st.messages.append({"role": "user", "content": obs})
         log.log("turn_start", agent=st.name, task=self.task.index, turn=self.turn, observation=obs)
-        actions = 0
-        for step in range(1, self.g.max_steps_per_turn + 1):
+        actions = 0          # ausgeführte Tool-Calls in diesem Zug (Grenze: max_steps_per_turn, steht im Prompt)
+        retried = False      # Hinweis "no_tool_call" höchstens einmal pro Zug
+        over = False
+        step = 0
+        while not over:
+            step += 1
             resp = self._call_llm(st, step, log)
-            assistant: dict[str, Any] = {"role": "assistant", "content": resp.content}
             calls = [c for c in resp.tool_calls if c.name]
-            if calls:
-                assistant["tool_calls"] = [c.to_openai() for c in calls]
-            st.messages.append(assistant)
             if not calls:
                 st.no_tool_responses += 1
                 log.log("no_tool_call", agent=st.name, task=self.task.index, turn=self.turn, step=step,
-                        visible=resp.content)
-                break  # free text without action ends the turn (text is not delivered)
-            over = False
+                        visible=resp.content, kept_in_history=False)
+                self._report(st, resp, [], "kein Tool-Call")
+                # Text ohne Tool-Call wird NICHT in den Verlauf übernommen (nur im Log)
+                if self.g.no_tool_retry and not retried and self.prompts.has_turn("no_tool_call"):
+                    retried = True
+                    st.messages.append({"role": "user", "content": self.prompts.turn("no_tool_call")})
+                    log.log("no_tool_call_hint", agent=st.name, task=self.task.index, turn=self.turn)
+                    continue
+                if retried and st.messages and st.messages[-1]["role"] == "user" and step > 1:
+                    st.messages.pop()  # Hinweis ohne Wirkung nicht im Verlauf lassen
+                break  # Zug endet
+            assistant: dict[str, Any] = {"role": "assistant", "content": resp.content,
+                                         "tool_calls": [c.to_openai() for c in calls]}
+            st.messages.append(assistant)
+            results: list[str] = []
             for call in calls:
                 if over:
                     result = "ERROR: your turn has already ended; this call was ignored."
@@ -452,13 +483,51 @@ class Game:
                 else:
                     result, over = self._exec(st, call, actions, log)
                     actions += 1
+                    results.append(self._short_call(call, result))
+                    if not over and actions >= self.g.max_steps_per_turn:
+                        over = True
+                        st.max_steps_hit += 1
+                        log.log("max_steps_reached", agent=st.name, task=self.task.index, turn=self.turn)
+                        result += f" Your turn has ended ({self.g.max_steps_per_turn} tool calls)."
                 st.messages.append({"role": "tool", "tool_call_id": call.id, "name": call.name, "content": result})
-            if over:
-                break
-        else:
-            st.max_steps_hit += 1
-            log.log("max_steps_reached", agent=st.name, task=self.task.index, turn=self.turn)
-        log.log("turn_end", agent=st.name, task=self.task.index, turn=self.turn)
+            self._report(st, resp, results)
+        log.log("turn_end", agent=st.name, task=self.task.index, turn=self.turn, tool_calls=actions)
+
+    # ------------------------------------------------------------------ terminal output
+    @staticmethod
+    def _short_call(call: ToolCall, result: str) -> str:
+        args = call.arguments or {}
+        if call.name == "submit_answer":
+            return f"submit_answer({args.get('total', args)})" + (" ERROR" if result.startswith("ERROR") else "")
+        if call.name in ("send_message", "write_file", "append_file", "give_up"):
+            text = str(args.get("text") or args.get("content") or args.get("reason") or "")
+            text = " ".join(text.split())
+            return f'{call.name}("{text[:70]}{"…" if len(text) > 70 else ""}")' + \
+                (" ERROR" if result.startswith("ERROR") else "")
+        return call.name + (" ERROR" if result.startswith("ERROR") else "")
+
+    def _report(self, st: AgentState, resp: LLMResponse, calls: list[str], note: str = "") -> None:
+        """Eine Zeile pro LLM-Antwort im Terminal (live, ungepuffert)."""
+        if self.progress is None:
+            return
+        think = resp.reasoning_tokens
+        approx = ""
+        if think is None:  # Server meldet die Aufteilung nicht -> nach Textlänge schätzen
+            r, v = len(resp.reasoning or ""), len(resp.content or "") + sum(len(c.raw_arguments or "")
+                                                                         for c in resp.tool_calls)
+            think = round(resp.completion_tokens * r / (r + v)) if (r + v) else 0
+            approx = "~"
+        answer = max(0, resp.completion_tokens - think)
+        sub = st.submission
+        res = ""
+        if sub is not None and sub.turn == self.turn and any(c.startswith("submit_answer") for c in calls):
+            res = " → richtig" if sub.correct else f" → falsch (wahr {self.task.true_total:.2f})"
+        limit = " ⚠ Limit" if self._limit_hit(resp) else ""
+        self.progress(
+            f"[{self.label}{' | ' if self.label else ''}{self.spec.model} | Aufgabe {self.task.index}/{self.n_tasks}, "
+            f"Zug {self.turn}/{self.g.max_turns_per_task}] {st.name}: {resp.latency_s:.1f}s, "
+            f"Thinking {approx}{think} / Antwort {approx}{answer} Tok{limit} | "
+            + ("; ".join(calls) if calls else note) + res)
 
     def _call_llm(self, st: AgentState, step: int, log: _Buffer) -> LLMResponse:
         # Seed per agent and call (not a shared counter -> deterministic despite parallel turns)
@@ -574,18 +643,21 @@ class Game:
         if name == "read_file":
             log.log("file_read", agent=st.name, path=path, task=self.task.index, turn=self.turn)
             return st.draft if st.draft else "(empty file)", False, True
-        if name == "write_file":
+        if name in ("write_file", "append_file"):
             content = args.get("content", "")
             content = content if isinstance(content, str) else str(content)
+            new = content if name == "write_file" else _appended(st.draft, content)
             try:
-                self.ws.check_size(content)
+                self.ws.check_size(new)
             except SandboxError as exc:
                 return f"ERROR: {exc}", False, False
-            st.draft = content
-            st.pending_ops.append((path, content))
+            st.draft = new
+            kind = "write" if name == "write_file" else "append"
+            st.pending_ops.append((kind, path, content))
             log.log("file_change_pending", agent=st.name, task=self.task.index, turn=self.turn, path=path,
-                    content=content)
-            return f"OK: {path} updated. {st.other} will see the change from the next turn on.", False, True
+                    op=kind, content=content)
+            verb = "updated" if kind == "write" else "text added"
+            return f"OK: {path} {verb}. {st.other} will see the change from the next turn on.", False, True
         return f"ERROR: tool '{name}' not implemented.", False, False
 
     def _submit(self, st: AgentState, args: dict[str, Any], log: _Buffer) -> tuple[str, bool, bool]:
@@ -605,13 +677,20 @@ class Game:
 
     # ------------------------------------------------------------------ README
     def _resolve_turn(self, order: list[str]) -> None:
-        """Apply this turn's README edits (first mover first) and tell the other agent."""
+        """Apply this turn's README edits (both agents: random order) and tell the other agent."""
         changed = {k: False for k in order}
+        apply_order = list(order)
         if self.ws is not None:
-            for k in order:
+            if all(self.agents[k].pending_ops for k in order):  # Konflikt: Reihenfolge per Zufall
+                self.order_rng.shuffle(apply_order)
+                self.log.log("write_order", task=self.task.index, turn=self.turn,
+                             order=[f"Agent {k}" for k in apply_order])
+            for k in apply_order:
                 st = self.agents[k]
-                for path, content in st.pending_ops:
+                for kind, path, content in st.pending_ops:
                     try:
+                        if kind == "append":
+                            content = _appended(self.ws.read(path), content)
                         change = self.ws.write(path, content, st.name, round_no=self.global_turn)
                     except SandboxError as exc:
                         self.log.log("file_change_failed", agent=st.name, task=self.task.index, turn=self.turn,
@@ -619,7 +698,7 @@ class Game:
                         continue
                     changed[k] = True
                     self.log.log("file_change", agent=st.name, task=self.task.index, turn=self.turn,
-                                 **change.to_dict())
+                                 tool=f"{kind}_file", **change.to_dict())
                 st.pending_ops.clear()
             for k in order:
                 other_key = "B" if k == "A" else "A"

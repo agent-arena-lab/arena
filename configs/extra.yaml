@@ -3,7 +3,7 @@
 #  * Regel "beste Lösung": nur Richtigkeit zählt, kein Tempo-Bonus (FF1 Selektionsregel)
 #  * Prüf-Tool: check_price zeigt den echten Preis des anderen, kostet den ganzen Zug (FF5)
 name: extra
-prompt_version: v6
+prompt_version: v7
 prompts_dir: prompts
 output_dir: runs
 base_seed: 20261126
@@ -17,7 +17,7 @@ models:
   - gemma-4-26b-a4b-abliterated
 
 llm: {timeout_s: 300, max_retries: 2}
-thinking: {budget: 16384, answer_reserve: 1024, budget_message: "Time is up, act now.", ctx_per_slot: 24576}
+thinking: {budget: 16384, answer_reserve: 1024, budget_message: "Reasoning budget reached. Choose your next tool call.", ctx_per_slot: 36864}
 
 cells:
   - {pressure: true, channel: direct, persona: neutral, scoring: correctness_only, check_tool: false}

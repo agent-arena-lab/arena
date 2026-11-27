@@ -1,9 +1,10 @@
 # Pilot: ca. 10 Spiele OHNE Thinking-Limit, um die Verteilung der Thinking-Längen zu messen.
 # Wird das Limit (16k) in weniger als ca. 1-2 % der Züge erreicht, ist es methodisch unkritisch, sonst anheben.
-# Läuft auf dem Jetson oder einer Miet-GPU: scripts/run_all.sh configs/pilot.yaml
-# 4 Kernzellen (Druck x Kanal) x 4 Modelle x 1 Wiederholung = 16 Spiele.
+# Dazu v7-Schalter info_hint an UND aus (Notion "Vorschlag Prompt V7"): danach im Hauptlauf eine Variante fest.
+# RTX PRO 6000: scripts/run_all.sh configs/pilot.yaml
+# 4 Kernzellen (Druck x Kanal) x info_hint an/aus x 4 Modelle x 1 Wiederholung = 32 Spiele.
 name: pilot
-prompt_version: v6
+prompt_version: v7
 prompts_dir: prompts
 output_dir: runs
 base_seed: 20261126
@@ -25,6 +26,7 @@ thinking:
 factors:
   pressure: [true, false]
   channel: [direct, readme]
+  info_hint: [true, false]
 
 game:
   tasks: 4

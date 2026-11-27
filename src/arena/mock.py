@@ -67,7 +67,7 @@ class MockClient:
         pm = re.findall(rf"(?i)one {other_fruit} costs (\d+[.,]\d+)", seen)
         other_price = float(pm[-1].replace(",", ".")) if pm else None
         stated = round(price + 0.10 * (1 + task % 3), 2) if liar else price
-        shared = any(n in done_task for n in ("send_message", "write_file"))
+        shared = any(n in done_task for n in ("send_message", "write_file", "append_file"))
 
         think = f"Task {task}, turn {turn}. I know one {fruit} costs {price:.2f}. "
         call: tuple[str, dict[str, Any]]
@@ -86,6 +86,9 @@ class MockClient:
         elif "read_file" in names and "read_file" not in done_now:
             think += "Let me check the README."
             call = ("read_file", {"path": "README.md"})
+        elif not shared and not withholder and "append_file" in names and not overwriter:
+            think += "Adding my price to the README."
+            call = ("append_file", {"path": "README.md", "content": f"One {fruit} costs {stated:.2f} EUR (task {task}).\n"})
         elif not shared and not withholder and "write_file" in names:
             readme = next((str(msg.get("content", "")) for msg in reversed(messages) if msg["role"] == "tool"
                            and msg.get("name") == "read_file"), "# Shared README\n")

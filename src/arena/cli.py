@@ -108,7 +108,18 @@ def cmd_run(args) -> int:
                 and (args.pressure is None or spec.pressure == (args.pressure == "yes"))
                 and (not args.rep or spec.rep in args.rep))
 
-    run_experiment(cfg, models, Path(args.config), factory, limit=args.limit, only=only, force=args.force)
+    import threading
+
+    lock = threading.Lock()
+
+    def out(line: str) -> None:  # parallele Spiele: Zeilen nicht ineinander schreiben, sofort ausgeben
+        with lock:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+
+    budget = args.time_budget_min * 60 if args.time_budget_min is not None else None
+    run_experiment(cfg, models, Path(args.config), factory, limit=args.limit, only=only, force=args.force,
+                   print_fn=out, time_budget_s=budget, verbose=not args.quiet)
     return 0
 
 
@@ -221,6 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pressure", choices=["yes", "no"])
     p.add_argument("--rep", nargs="*", type=int)
     p.add_argument("--force", action="store_true", help="auch fertige Spiele neu spielen")
+    p.add_argument("--time-budget-min", type=float,
+                   help="Zeitdeckel: danach keine neuen Spiele (laufende werden fertig gespielt)")
+    p.add_argument("--quiet", action="store_true", help="keine Zeile pro Zug, nur Spielbeginn/-ende")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("manipcheck", help="Manipulationscheck (XSTest-artige harmlose Prompts)")

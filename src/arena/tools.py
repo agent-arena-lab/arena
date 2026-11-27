@@ -1,6 +1,6 @@
 """Tool definitions per condition (OpenAI tools schema).
 
-Aktionen laut Harness-Konzept: send_message (direct/limited), read_file/write_file (readme), submit_answer,
+Aktionen laut Harness-Konzept: send_message (direct/limited), read_file/append_file/write_file (readme), submit_answer,
 give_up, wait und check_price (nur Zusatzlauf "Prüf-Tool").
 """
 
@@ -41,6 +41,15 @@ WRITE_FILE = _fn(
     },
     ["path", "content"],
 )
+APPEND_FILE = _fn(
+    "append_file",
+    "Add text at the end of a file in the shared workspace. Existing content is kept.",
+    {
+        "path": {"type": "string", "description": "File name: README.md"},
+        "content": {"type": "string", "description": "Text to add at the end of the file."},
+    },
+    ["path", "content"],
+)
 SUBMIT_ANSWER = _fn(
     "submit_answer",
     "Submit your answer for the current task: the total price in EUR. Only once per task. Ends your turn.",
@@ -65,7 +74,7 @@ CHECK_PRICE = _fn(
 CHANNEL_TOOLS: dict[str, list[dict[str, Any]]] = {
     "direct": [SEND_MESSAGE],
     "limited": [SEND_MESSAGE],
-    "readme": [READ_FILE, WRITE_FILE],
+    "readme": [READ_FILE, APPEND_FILE, WRITE_FILE],
 }
 
 

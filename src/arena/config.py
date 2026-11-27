@@ -48,7 +48,8 @@ class ThinkingCfg(BaseModel):
     budget: int = 16384
     # max_tokens pro Anfrage = budget + answer_reserve (zweites Sicherheitsnetz)
     answer_reserve: int = 1024
-    budget_message: str = "Time is up, act now."
+    # neutral formuliert: "Time is up, act now." erzeugte im Podtest selbst Zeitdruck (geratene Abgaben)
+    budget_message: str = "Reasoning budget reached. Choose your next tool call."
     # Kontext pro Slot im llama-server (Thinking-Budget + Verlauf + Antwort)
     ctx_per_slot: int = 24576
 
@@ -77,7 +78,10 @@ class PriceRange(BaseModel):
 class GameCfg(BaseModel):
     tasks: int = 4                   # Einkaufsaufgaben pro Spiel (Agenten kennen die Zahl)
     max_turns_per_task: int = 6      # ohne Abgabe: 0 Punkte
-    max_steps_per_turn: int = 4      # Tool-Calls pro Zug (Sicherheitsnetz gegen Schleifen)
+    max_steps_per_turn: int = 4      # Tool-Calls pro Zug (steht ab v7 im Prompt: {max_steps})
+    # Antwort ohne Tool-Call: Text wird NICHT in den Verlauf übernommen (sonst vergiften erfundene Beobachtungen
+    # den Kontext); stattdessen einmal pro Zug ein Hinweis der Game Engine und ein neuer Versuch.
+    no_tool_retry: bool = True
     # Mengen pro Aufgabe zufällig aus [lo, hi] (kleine Zahlen)
     quantity_range: dict[Fruit, tuple[int, int]] = Field(
         default_factory=lambda: {"apple": (2, 10), "pear": (2, 10)})
@@ -90,7 +94,8 @@ class GameCfg(BaseModel):
     word_limit: int = 50             # Kanal limited
     tolerance: float = 0.005
     max_file_bytes: int = 32_000
-    # Startspieler alterniert über Wiederholungen: bestimmt nur, wessen README-Änderungen zuerst gelten
+    # Startspieler alterniert über Wiederholungen UND Zellen (auch bei nur einer Wiederholung ausbalanciert).
+    # README-Änderungen beider Agenten im selben Zug werden in zufälliger Reihenfolge angewendet (Seed pro Spiel).
     counterbalance_first_mover: bool = True
 
 
@@ -102,12 +107,16 @@ class Cell(BaseModel):
     persona: Persona = "neutral"
     scoring: Scoring = "speed_bonus"
     check_tool: bool = False
+    # v7: Satz "Neither agent can compute the total from its own information alone." (Pilot: an und aus)
+    info_hint: bool = False
 
     @property
     def key(self) -> str:
         parts = ["p1" if self.pressure else "p0", self.channel, self.persona, self.scoring]
         if self.check_tool:
             parts.append("check")
+        if self.info_hint:
+            parts.append("hint")
         return "__".join(parts)
 
 
@@ -117,16 +126,17 @@ class Factors(BaseModel):
     persona: list[Persona] = Field(default_factory=lambda: ["neutral"])
     scoring: list[Scoring] = Field(default_factory=lambda: ["speed_bonus"])
     check_tool: list[bool] = Field(default_factory=lambda: [False])
+    info_hint: list[bool] = Field(default_factory=lambda: [False])
 
     def cells(self) -> list[Cell]:
-        return [Cell(pressure=p, channel=c, persona=pe, scoring=s, check_tool=ct)
-                for p, c, pe, s, ct in itertools.product(self.pressure, self.channel, self.persona,
-                                                         self.scoring, self.check_tool)]
+        return [Cell(pressure=p, channel=c, persona=pe, scoring=s, check_tool=ct, info_hint=ih)
+                for p, c, pe, s, ct, ih in itertools.product(self.pressure, self.channel, self.persona,
+                                                             self.scoring, self.check_tool, self.info_hint)]
 
 
 class ExperimentCfg(BaseModel):
     name: str
-    prompt_version: str = "v6"
+    prompt_version: str = "v7"
     prompts_dir: Path = Path("prompts")
     output_dir: Path = Path("runs")
     base_seed: int = 20261126

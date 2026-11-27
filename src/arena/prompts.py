@@ -43,8 +43,12 @@ class PromptSet:
         return cls(version, path, hashlib.sha256(raw).hexdigest(), data)
 
     def system_prompt(self, *, prefix: str = "", persona: str, scoring: str, pressure: bool, channel: str,
-                      check_tool: bool, **kw: Any) -> str:
+                      check_tool: bool, info_hint: bool = False, **kw: Any) -> str:
+        hints = self.data.get("info_hint") or {}  # ab v7
+        if info_hint and "on" not in hints:
+            raise ValueError(f"{self.path}: info_hint requested, but the prompt version has no 'info_hint' block")
         parts = {
+            "info_hint": fmt(hints.get("on" if info_hint else "off", ""), **kw),
             "scoring": fmt(self.data["scoring"][scoring], **kw),
             "selection": fmt(self.data["selection"]["pressure" if pressure else "no_pressure"], **kw),
             "channel": fmt(self.data["channels"][channel], **kw),
@@ -59,3 +63,6 @@ class PromptSet:
 
     def turn(self, key: str, **kw: Any) -> str:
         return fmt(self.data["turn"][key], **kw)
+
+    def has_turn(self, key: str) -> bool:
+        return key in self.data["turn"]

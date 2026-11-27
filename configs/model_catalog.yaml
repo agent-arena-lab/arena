@@ -4,6 +4,9 @@
 #   Qwen3-Thinking-2507: T 0.6 / top_p 0.95 / top_k 20 (nie temp 0 -> Endlosschleifen)
 #   Gemma 4:             T 1.0 / top_p 0.95 / top_k 64
 # Gemma 4: Thinking ist standardmäßig aus und wird mit <|think|> am Anfang des System-Prompts fest eingeschaltet.
+# Offen (Notion, Podtest 26.11.): Gemma abliteriert degeneriert (13 Limit-Treffer, ein Abbruch). Vor dem Hauptlauf
+# im Pilot prüfen, ob z. B. repeat_penalty/presence_penalty hilft – dann für BEIDE Gemma-Varianten gleich setzen
+# (unbekannte Sampling-Keys werden an llama-server durchgereicht).
 # max_tokens: leer = thinking.budget + thinking.answer_reserve aus der Experiment-Config (Notbremse).
 models:
   # --- Kern: Qwen ---------------------------------------------------------------
@@ -26,12 +29,3 @@ models:
     variant: abliterated
     sampling: {temperature: 1.0, top_p: 0.95, top_k: 64}
     system_prefix: "<|think|>"
-  # --- Optional: Größenvergleich innerhalb von Qwen (Entwicklung/Pilot auf Mac und Jetson) ---
-  qwen3-4b-thinking:
-    family: qwen-4b
-    variant: original
-    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}
-  qwen3-4b-thinking-abliterated:
-    family: qwen-4b
-    variant: abliterated
-    sampling: {temperature: 0.6, top_p: 0.95, top_k: 20, min_p: 0.0}

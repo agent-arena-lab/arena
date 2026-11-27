@@ -68,13 +68,16 @@ def build_specs(cfg: ExperimentCfg, model: str) -> list[RunSpec]:
     specs: list[RunSpec] = []
     for rep in range(1, cfg.repetitions + 1):
         tasks = draw_tasks(cfg, rep)
-        first = ("A" if rep % 2 == 1 else "B") if cfg.game.counterbalance_first_mover else "A"
-        for cell in cfg.design_cells():
+        for ci, cell in enumerate(cfg.design_cells()):
+            # alterniert über Wiederholungen und Zellen -> auch bei 1 Wiederholung ausbalanciert;
+            # für alle Modelle gleich (gepaart)
+            first = ("A" if (rep + ci) % 2 == 1 else "B") if cfg.game.counterbalance_first_mover else "A"
             run_id = f"{model}__{cell.key}__r{rep:02d}"
             specs.append(RunSpec(
                 run_id=run_id, model=model, family=mcfg.family, variant=mcfg.variant, pressure=cell.pressure,
                 channel=cell.channel, persona=cell.persona, scoring=cell.scoring, check_tool=cell.check_tool,
                 rep=rep, seed=_stable_seed(f"{cfg.base_seed}:{run_id}"), tasks=tasks, first_mover=first,
+                info_hint=cell.info_hint,
             ))
     if cfg.shuffle_run_order:  # gegen zeitliche Konfundierung (Thermik, Cache, ...)
         random.Random(f"{cfg.base_seed}:{model}").shuffle(specs)
@@ -109,7 +112,8 @@ def load_servers(cfg: ExperimentCfg) -> list[dict[str, Any]]:
 
 
 def run_one(spec: RunSpec, cfg: ExperimentCfg, prompts: PromptSet, client: LLMClient, server_info: dict[str, Any],
-            config_sha256: str, force: bool = False) -> dict[str, Any] | None:
+            config_sha256: str, force: bool = False, progress: Callable[[str], None] | None = None,
+            label: str = "") -> dict[str, Any] | None:
     run_dir = experiment_dir(cfg) / spec.run_id
     if (run_dir / RESULT).exists() and not force:
         return None
@@ -125,7 +129,8 @@ def run_one(spec: RunSpec, cfg: ExperimentCfg, prompts: PromptSet, client: LLMCl
         "run_id": spec.run_id,
         "experiment": cfg.name,
         "condition": {"pressure": spec.pressure, "channel": spec.channel, "persona": spec.persona,
-                      "scoring": spec.scoring, "check_tool": spec.check_tool, "cell": spec.cell},
+                      "scoring": spec.scoring, "check_tool": spec.check_tool, "info_hint": spec.info_hint,
+                      "cell": spec.cell},
         "family": spec.family,
         "variant": spec.variant,
         "model_alias": spec.model,
@@ -156,7 +161,8 @@ def run_one(spec: RunSpec, cfg: ExperimentCfg, prompts: PromptSet, client: LLMCl
     logger = EventLogger(run_dir / "events.jsonl", spec.run_id)
     ws = Workspace(run_dir / "shared", cfg.game.max_file_bytes, allowed_files={"README.md"}) \
         if spec.channel == "readme" else None
-    game = Game(spec, cfg, prompts, client, logger, ws, history_dir=run_dir / "readme_history")
+    game = Game(spec, cfg, prompts, client, logger, ws, history_dir=run_dir / "readme_history",
+                progress=progress, label=label)
     try:
         result = game.run()
     finally:
@@ -181,6 +187,7 @@ def run_one(spec: RunSpec, cfg: ExperimentCfg, prompts: PromptSet, client: LLMCl
         "persona": spec.persona,
         "scoring": spec.scoring,
         "check_tool": spec.check_tool,
+        "info_hint": spec.info_hint,
         "cell": spec.cell,
         "rep": spec.rep,
         "seed": spec.seed,
@@ -198,7 +205,26 @@ def run_one(spec: RunSpec, cfg: ExperimentCfg, prompts: PromptSet, client: LLMCl
     }
     (run_dir / "transcript.md").write_text(render_transcript(run_dir, summary=summary), encoding="utf-8")
     write_json(run_dir / RESULT, summary)  # zuletzt: markiert das Spiel als fertig (Fortsetzen)
+    _append_live(cfg, summary)
     return summary
+
+
+def _append_live(cfg: ExperimentCfg, s: dict[str, Any]) -> None:
+    """Jedes fertige Spiel sofort in runs/<exp>/results_live.jsonl (eine Zeile, auch bei späterem Abbruch)."""
+    o = s.get("outcome") or {}
+    row = {k: s.get(k) for k in ("finished_at", "run_id", "model", "family", "variant", "cell", "rep", "status",
+                                 "duration_s", "limit_hits", "timeouts")}
+    row.update(scores=o.get("scores"), removed=o.get("removed"), n_correct=o.get("n_correct"),
+               n_answers=o.get("n_answers"),
+               tokens=sum(a.get("completion_tokens", 0) for a in (s.get("agents") or {}).values()),
+               llm_calls=sum(a.get("llm_calls", 0) for a in (s.get("agents") or {}).values()),
+               flags={k: v for k, v in (s.get("flags") or {}).items() if k.startswith("any_")})
+    path = experiment_dir(cfg) / "results_live.jsonl"
+    with _LIVE_LOCK, path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+_LIVE_LOCK = threading.Lock()
 
 
 def run_experiment(
@@ -211,8 +237,15 @@ def run_experiment(
     only: Callable[[RunSpec], bool] | None = None,
     force: bool = False,
     print_fn: Callable[[str], None] = print,
+    time_budget_s: float | None = None,
+    verbose: bool = True,
 ) -> list[dict[str, Any]]:
-    """Run all games of `models`. `client_factory(base_url)` returns a client per llama-server."""
+    """Run all games of `models`. `client_factory(base_url)` returns a client per llama-server.
+
+    ``time_budget_s``: danach werden keine neuen Spiele mehr gestartet; ein neues Spiel startet nur, wenn es
+    nach der bisherigen mittleren Spieldauer noch vor Ablauf fertig wird (laufende Spiele werden beendet).
+    """
+    t_start = time.monotonic()
     prompts = PromptSet.load(cfg.prompts_dir, cfg.prompt_version)
     config_sha = hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
     out_dir = experiment_dir(cfg)
@@ -239,41 +272,62 @@ def run_experiment(
 
     total = sum(len(q) for q in queues.values())
     lock = threading.Lock()
-    state = {"executed": 0, "seen": 0}
+    state = {"executed": 0, "seen": 0, "skipped_seen": 0, "durations": [], "stopped": 0}
+    progress = (lambda line: print_fn(line)) if verbose else None
     done: list[dict[str, Any]] = []
     failed: list[str] = []
 
     def work(model: str, url: str, client: LLMClient, info: dict[str, Any]) -> None:
         while True:
             with lock:
-                if not queues[model] or (limit is not None and state["executed"] >= limit):
+                if not queues[model] or (limit is not None and state["seen"] - state["skipped_seen"] >= limit):
                     return
+                if time_budget_s is not None:
+                    elapsed = time.monotonic() - t_start
+                    est = (sum(state["durations"]) / len(state["durations"])) if state["durations"] else 0.0
+                    if elapsed + est > time_budget_s:
+                        state["stopped"] += len(queues[model])
+                        queues[model].clear()
+                        print_fn(f"[arena] Zeitdeckel {time_budget_s / 60:.0f} min für diese Gruppe: keine neuen "
+                                 f"Spiele mehr ({elapsed / 60:.1f} min vergangen, Ø Spiel {est / 60:.1f} min)")
+                        return
                 spec = queues[model].popleft()
                 state["seen"] += 1
                 idx = state["seen"]
             t0 = time.monotonic()
+            if not (experiment_dir(cfg) / spec.run_id / RESULT).exists() or force:
+                print_fn(f"[{idx}/{total}] START {spec.run_id} (erster Zug: Agent {spec.first_mover})")
             try:
-                summary = run_one(spec, cfg, prompts, client, info, config_sha, force=force)
+                summary = run_one(spec, cfg, prompts, client, info, config_sha, force=force, progress=progress,
+                                  label=f"Spiel {idx}/{total}")
             except ConnectionError as exc:
                 with lock:
                     failed.append(spec.run_id)
                 print_fn(f"[{idx}/{total}] ABBRUCH (Server {url} nicht erreichbar): {exc}")
                 return  # dieser Worker hört auf; Spiel bleibt offen und wird beim nächsten Start gespielt
             if summary is None:
+                with lock:
+                    state["skipped_seen"] += 1
                 print_fn(f"[{idx}/{total}] skip (done) {spec.run_id}")
                 continue
+            dur = time.monotonic() - t0
             with lock:
                 state["executed"] += 1
+                state["durations"].append(dur)
                 done.append(summary)
             o = summary["outcome"]
-            print_fn(f"[{idx}/{total}] {spec.run_id}: status={summary['status']} scores={o['scores']} "
+            ag = summary["agents"].values()
+            print_fn(f"[{idx}/{total}] FERTIG {spec.run_id}: status={summary['status']} scores={o['scores']} "
                      f"removed={o['removed']} correct={o['n_correct']}/{o['n_answers']} "
-                     f"({time.monotonic() - t0:.0f}s)")
+                     f"LLM-Aufrufe={sum(a['llm_calls'] for a in ag)} Tokens={sum(a['completion_tokens'] for a in ag)} "
+                     f"Limit={summary['limit_hits']} ({dur:.0f}s) -> results_live.jsonl")
 
     with ThreadPoolExecutor(max_workers=max(1, len(workers)), thread_name_prefix="game") as pool:
         for f in [pool.submit(work, *w) for w in workers]:
             f.result()
-    print_fn(json.dumps({"executed": state["executed"], "planned": total, "failed": failed, "out": str(out_dir)}))
+    print_fn(json.dumps({"executed": state["executed"], "planned": total, "not_started_time_budget": state["stopped"],
+                         "failed": failed, "elapsed_s": round(time.monotonic() - t_start),
+                         "out": str(out_dir)}))
     if failed:
         raise SystemExit(f"{len(failed)} Spiele wegen Verbindungsfehler offen. Server prüfen und erneut starten "
                          "(fertige Spiele werden übersprungen).")

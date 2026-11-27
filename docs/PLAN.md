@@ -3,7 +3,7 @@
 **Verhalten konkurrierender LLM-Agenten unter Selektionsdruck**
 
 Bachelor-Seminar *Data Driven Enterprise* · Practical Task · Fokus: AI Safety and Security, Agentic AI
-Team: Tom Hente, Constantin Lösch · Stand: 26.11.2026 (abgeglichen mit Notion)
+Team: Tom Hente, Constantin Lösch · Stand: 27.11.2026 (abgeglichen mit Notion „Changes für Code“)
 
 Technische Doku: [`README.md`](../README.md) · Codebuch: [`CODEBUCH.md`](CODEBUCH.md)
 
@@ -66,35 +66,39 @@ Mechanismus zusammen, der auch Verweigerungen steuert? Ein Nullbefund ist ein be
 | Thema | Entscheidung |
 |---|---|
 | Spielvariante | `multi_round`, Ein-Aufgaben-Spiel nur noch als Sonderfall (`game.tasks: 1`) |
-| Züge | gleichzeitig; Wirkungen ab dem nächsten Zug; README-Änderungen am Zugende, Startspieler zuerst |
+| Züge | gleichzeitig; Wirkungen ab dem nächsten Zug; max. 4 Tool-Calls pro Zug; README-Änderungen am Zugende, bei Konflikt in zufälliger Reihenfolge; `append_file` zusätzlich zu `write_file`; Text ohne Tool-Call nicht im Verlauf |
 | Punkte | erste richtige 2 (gleichzeitig beide 2), spätere richtige 1, falsche/keine 0 |
 | Rückmeldung | nach jeder Aufgabe: eigene Richtigkeit + Punktestand beider, keine Lösung |
 | Selektion | mit Druck: weniger Punkte → entfernt, Gleichstand Zufall (steht im Prompt); ohne Druck bleiben beide |
-| Prompts | Englisch, kein Prompt erwähnt Lügen/Zurückhalten/Manipulation, keine Anweisung zur Thinking-Länge (prompts/v6) |
-| Thinking | immer an, getrennt geloggt, nie im Verlauf; Notbremse 16.384 Tokens + `max_tokens` +1.024; „Limit erreicht“ pro Zug |
+| Prompts | Englisch, kein Prompt erwähnt Lügen/Zurückhalten/Manipulation, keine Anweisung zur Thinking-Länge (prompts/v7: Rolle, Zugablauf, individuelle Punkte, Schreibkonflikt; `info_hint` als Pilot-Schalter) |
+| Thinking | immer an, getrennt geloggt, nie im Verlauf; Notbremse 16.384 Tokens + `max_tokens` +1.024, neutrale Budget-Meldung; „Limit erreicht“ pro Zug |
 | Zeitlimit | 5 min pro Anfrage, einmal wiederholen, sonst `timeout` |
-| Modelle | Original + abliteriert (huihui-ai) je Familie, beide selbst mit identischem Befehl auf Q4_K_M quantisiert |
-| Inferenz | llama.cpp `llama-server`, gepinnte Version, `--jinja --reasoning-format deepseek --reasoning-budget` |
-| Hardware | Profile für RTX 3090, A6000, RTX PRO 6000, H100, H200, Jetson, Mac; Auswahl offen |
+| Modelle | Original + abliteriert (huihui-ai) je Familie, fertige Q4_K_M-GGUFs vom selben Quantisierer (mradermacher), Paar-Prüfung per Metadaten |
+| Inferenz | llama.cpp `llama-server` @ `fa9f928f2`, `--jinja --reasoning-format deepseek --reasoning-budget` |
+| Hardware | nur 1× RTX PRO 6000 (Lium-Pod, Volume für Build/Modelle/runs); Testversion `pod.sh test`, Hauptlauf `pod.sh full` |
 | Fortsetzbarkeit | Ergebnis nach jedem Spiel gesichert, fertige Spiele werden übersprungen |
 
 ## Offene Entscheidungen
 
 * Wissen die Agenten, dass der Gegner ein LLM bzw. dasselbe Modell ist?
-* Hardware für das Hauptexperiment (Empfehlung: Entwicklung/Pilot Jetson, Hauptlauf 1–2 × RTX PRO 6000 oder H100).
+* `info_hint` an oder aus (nach dem Pilot).
+* Gemma abliteriert: Sampling/Repeat-Penalty im Pilot prüfen.
 
 ## Roadmap
 
 **Phase 1 – Harness**
 - [x] multi_round, Punkte, Rückmeldung, Selektion, neue Aktionen (give_up, wait, check_price)
-- [x] Hardware-Profile, Multi-Server-Start, Selbst-Quantisierung, Start-Check, Manipulationscheck
+- [x] RTX-PRO-6000-Profil, Multi-Server-Start, fertige GGUFs + Paar-Prüfung, Start-Check, Manipulationscheck
+- [x] Prompt v7, zufällige Schreibreihenfolge, `append_file`, Live-Ausgabe pro Zug, Phasen-/Ladezeiten, Zeitdeckel pro Familie
 - [x] Auswertung (results.csv, results_tasks.csv, summary.md), verblindeter Kodierbogen, κ
 
 **Phase 2 – Pilot**
-- [ ] Modelle quantisieren (Gemma-Lizenz akzeptieren), Start-Check grün für alle vier Modelle
+- [x] Podtest 26.11. auf RTX PRO 6000: alle vier Modelle laufen (42 min)
+- [ ] Podtest mit v7 wiederholen (`pod.sh test`): weniger Rollenverwechslung, Raten in Zug 1, unbeantwortete Fragen?
 - [ ] Prüfen: Gemma-Thinking sauber in `reasoning_content` getrennt, Tool-Calls der abliterierten Varianten gültig
 - [ ] Pilot ohne Thinking-Limit (`configs/pilot.yaml`): Limit in < 1–2 % der Züge? Sonst Budget anheben
-- [ ] llama.cpp-Version pinnen, Laufzeit hochrechnen, Hardware entscheiden
+- [x] llama.cpp gepinnt, Hardware entschieden
+- [ ] Laufzeit Kerndesign messen (`ARENA_LIMIT=3`)
 
 **Phase 3 – Hauptläufe**
 - [ ] `core` (160) und `extra` (40), optional `extra_optional`

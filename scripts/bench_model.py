@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Speed test for ONE model that is already served by llama-server (started by scripts/models.sh bench).
 
-Only uses the standard library, so it also runs on the Jetson host when the harness lives in Docker.
+Only uses the standard library.
 
 Measures
   * prompt processing (pp) and generation (tg) speed in tokens/s, from llama-server's own timings
